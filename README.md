@@ -55,10 +55,5 @@ memosight/
 └── notebooks/    # 探索性实验
 ```
 
-## 当前状态
 
-🚧 早期开发中
 
----
-
-*MemoSight — see it once, find it forever.*
