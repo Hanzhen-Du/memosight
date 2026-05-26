@@ -1,0 +1,63 @@
+# =============================================================
+# MemoSight — Python ML project .gitignore
+# =============================================================
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Jupyter Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Data — never commit raw or processed datasets
+data/
+
+# Trained model artifacts
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.pb
+*.h5
+*.ckpt
+*.safetensors
+checkpoints/
+runs/
+
+# Logs & profiling
+logs/
+*.log
+*.csv.log
+tensorboard/
+
+# OS / editor temp files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.suo
+*.user
+
+# Secrets / env config
+.env
+*.env.local
+secrets.yaml
