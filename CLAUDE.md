@@ -1,5 +1,9 @@
 # CLAUDE.md — MemoSight 项目说明（供 Claude Code 每次会话自动加载）
 
+## 开发环境
+当前运行于 **WSL2 (Ubuntu)**，项目路径 `~/dev/memosight`（Linux 文件系统内，非 /mnt/c）。
+Claude Code 已登录，GitHub 认证已打通，可用 `code .` 在 VS Code（WSL 扩展）中打开。
+
 ## 项目是什么
 MemoSight 是一个本地优先、全程离线的可穿戴"视觉记忆助手"。通过摄像头捕捉现实世界的视觉信息，在本地转成可搜索的 memory card（时间戳 + OCR 文本 + 标签）。这是一个求职作品项目，目标是小而深、有可量化的硬数字、能演示。
 
@@ -24,7 +28,7 @@ MemoSight 是一个本地优先、全程离线的可穿戴"视觉记忆助手"�
 - notebooks/ — 探索性实验
 
 ## 关键工程约定（重要）
-- 本机上 `python` 命令会被 Windows Store 劫持。一律用 `py` launcher 调用 Python，或先激活 .venv 再用其中的 python。不要直接用 `python`。
+- WSL2 下调用 Python：直接用 `python3`，或先激活虚拟环境（`. .venv/bin/activate`）再用其中的 `python`。不要依赖裸 `python` 命令（WSL2 默认可能未将其映射到 python3）。
 - 训练在强机器（本地 GPU 或云端）上做；推理部署在树莓派 / TinyML 板上。这个分工不要混。
 - 守门员模型从一开始就要保持可移植性：标准框架训练、控制模型大小、支持 int8 量化、低分辨率灰度输入，便于将来移植到 TinyML 硬件。
 - 重处理层（OCR 等）直接用现成方案，不要投入研究或自研。
@@ -33,22 +37,5 @@ MemoSight 是一个本地优先、全程离线的可穿戴"视觉记忆助手"�
 - 现在不要安装 PyTorch 或任何重型机器学习库，等明确了训练走本地还是云端再决定。
 - 不要扩大范围去做多模态、多场景、可穿戴硬件集成——这些只在路线图叙事里，不进暑假交付。
 
-## 重要待办：装 PyTorch 之前先迁移到 WSL2
-本机用户名是中文（C:\Users\杜涵桢），会导致部分工具在读写用户主目录下的配置/缓存时出现编码问题。项目代码在 C:\dev\memosight（纯英文）下暂时安全，但等到开始装 PyTorch、下载数据集、跑训练时，中文路径风险会上升（很多 ML 工具的缓存默认放在用户主目录）。
-
-因此约定：**在安装 PyTorch 或任何重型机器学习库之前，先把开发环境迁移到 WSL2。** 迁移时机口诀 = "装 PyTorch 之前搬"。
-
-如果在本项目中用户要求安装 PyTorch、TensorFlow、CUDA 相关库、或要开始下载数据集/训练模型，而当前仍在 Windows 原生环境（非 WSL2）下，请主动提醒用户：建议先完成 WSL2 迁移再安装，并指向下面的迁移清单。
-
-## WSL2 迁移步骤清单（迁移时参照）
-注意：以下步骤中，标了【用户手动】的必须由用户本人操作，Claude Code 不要代为执行。
-
-1. 【用户手动】在 PowerShell（管理员）中运行 `wsl --install` 安装 WSL2 + 默认 Ubuntu，然后重启电脑。
-2. 【用户手动】重启后，在弹出的 Ubuntu 窗口里设置一个纯英文的 Linux 用户名和密码（例如 duhanzhen，不要用中文）。
-3. 【用户手动】在 WSL2 的 Ubuntu 里安装开发基础：更新 apt、安装 git、安装 Python 及 venv 工具、安装 Node.js（Claude Code 需要）。
-4. 【用户手动】在 WSL2 里重新安装 Claude Code（Windows 这边的 Claude Code 无法进入 WSL2 环境，需在 Linux 内独立安装）。
-5. 用 git clone 把 memosight 仓库从 GitHub 拉到 WSL2 的 Linux 文件系统里，路径放在 /home/用户名/dev/memosight 下。
-   关键约束：项目必须放在 WSL2 自己的 Linux 文件系统（/home/...）内，绝对不要放在通过 /mnt/c/ 访问的 Windows C 盘里——后者既没躲开中文路径，又有严重的跨文件系统性能损失。
-6. 在 WSL2 里重建 Python 虚拟环境（.venv），此时才可以安装 PyTorch 等机器学习库。
-7. 【用户手动】在 Windows 的 VS Code 里安装 "WSL" 扩展，之后用它直接打开 WSL2 里的项目，做到界面在 Windows、运行环境在 Linux。
-8. 迁移完成后，更新本 CLAUDE.md：把工作环境标注从 Windows 原生改为 WSL2，并移除上面"重要待办"一节（迁移已完成）。
+## 历史记录
+已于 2026 年 5 月完成从 Windows 原生环境到 WSL2 的开发环境迁移。
