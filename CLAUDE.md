@@ -64,18 +64,54 @@ MemoSight 是一个本地优先、全程离线的可穿戴"视觉记忆助手"�
 5. **涉及外部技术信息(库版本、API 用法、性能数字、benchmark 结果)时,必须给出信息来源**(网址、文档链接)。如果是凭"训练知识"答的、没有实时来源,必须明确说"以下基于训练知识,可能过时,建议核实"。
 6. **每次会话结束(或长任务完成),写一份简短的总结**到 `~/dev/memosight/notebooks/agent_log_<日期>.md`,包括:做了什么、改了哪些文件、还有什么待用户处理。
 
-### D2 wedge use case memo 的特殊规则
 
-D2 memo 是用户求职作品的核心交付物,**导师会 gate 审批**。AI agent 可以:
-- 整理用户访谈笔录、提取共性
-- 起草 **memo 框架**(结构、问题、留空待填的判断段落)
-- 列出候选 wedge 场景及各自的 go/no-go 信号
-
-AI agent **绝对不可以**:
-- 替用户对"选哪个 wedge 场景"做最终判断
-- 编造用户没说过的访谈内容、或夸大用户访谈的代表性
-- 把 memo "写成像最终稿一样"——必须明显留出 [需要用户填] 的标记
 
 ### 不确定时的默认行为
 
 **当上述规则没明确覆盖某种情况时,默认采取最保守的动作:停下来问用户,而不是猜。** 用户不在场也要停——把问题写进 `agent_log_<日期>.md` 等用户回应。
+
+## MemoSight Workflow
+
+本段定义 AI agent 在 MemoSight 项目里**怎么干活**(前面 Guardrails 定义"不准做什么")。
+
+### 推荐的工具分工
+
+OpenClaw 应作为 orchestrator(协调者),使用:
+
+- `taskflow` — 多步、需要持久化的工作
+- `tmux` — 监督交互式的 Claude Code 或 shell 会话
+- `coding-agent` — 仓库内代码 / 文档编辑
+- `spike` — 一次性可行性对比验证
+- `diagram-maker` — 架构图
+- `github` — 仅用于读取 / 状态 / issue 查询,除非用户明确批准安全的写操作
+
+Claude Code 应负责仓库内的具体编辑、测试、实现。
+
+**Do not use OpenClaw to directly perform complex repo edits unless the change is tiny and clearly safe.**(除非改动小且明显安全,否则不要让 OpenClaw 直接做复杂仓库编辑——交给 coding-agent。)
+
+### 默认工作流(接到任务时)
+
+1. 用一句话复述任务
+2. 检查 `pwd`、`git status --short`、`git branch --show-current`
+3. 读 `CLAUDE.md`
+4. 决定用 `coding-agent`、`spike`、`tmux` 还是直接编辑
+5. 修改文件前先看当前 diff
+6. 做"最小的安全单位"工作
+7. 汇报:
+   - 做了什么
+   - 改了哪些文件
+   - 跑了哪些命令
+   - 开放问题
+   - 推荐的下一个任务
+8. 写 / 更新 `notebooks/agent_log_<YYYY-MM-DD>.md`
+
+### 安全输出风格
+
+偏好简洁、可审计的输出:
+- 不夸大
+- 不编造 benchmark 数字
+- 标注假设
+- 标注 blocker
+- 标注待用户决策的事项
+
+不确定时,**停下来问用户,不要即兴发挥**。
