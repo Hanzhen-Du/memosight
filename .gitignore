@@ -61,3 +61,7 @@ desktop.ini
 .env
 *.env.local
 secrets.yaml
+
+# OpenClaw workspace state (local only)
+.openclaw/
+.claude/settings.local.json
