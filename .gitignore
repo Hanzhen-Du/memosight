@@ -6,7 +6,6 @@
 .venv/
 venv/
 env/
-.env/
 
 # Python cache
 __pycache__/
@@ -21,7 +20,7 @@ build/
 *.egg-info/
 *.egg
 
-# Jupyter Notebooks checkpoints
+# Jupyter notebook checkpoints
 .ipynb_checkpoints/
 
 # Data — never commit raw or processed datasets
@@ -34,6 +33,7 @@ data/
 *.tflite
 *.pb
 *.h5
+*.keras
 *.ckpt
 *.safetensors
 checkpoints/
@@ -42,8 +42,12 @@ runs/
 # Logs & profiling
 logs/
 *.log
-*.csv.log
 tensorboard/
+
+# Secrets / env config
+.env
+*.env.local
+secrets.yaml
 
 # OS / editor temp files
 .DS_Store
@@ -56,19 +60,3 @@ desktop.ini
 .vscode/
 *.suo
 *.user
-
-# Secrets / env config
-.env
-*.env.local
-secrets.yaml
-
-# OpenClaw workspace state (local only)
-.openclaw/
-.claude/settings.local.json
-
-#
-.venv/
-
-#pyhton缓存
-__pycache__/
-*.pyc

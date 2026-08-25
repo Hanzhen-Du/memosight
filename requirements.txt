@@ -1,0 +1,16 @@
+# MemoSight 依赖
+# 安装：pip install -r requirements.txt（请自行在虚拟环境中执行）
+
+# 数据准备：视频抽帧 + 灰度降清（scripts/extract_frames.py）
+opencv-python
+
+# 数据采集：按关键词从 Pexels 批量下载图（scripts/download_images.py）
+requests
+
+# 守门员建模 / 训练 / int8 量化导出（scripts/model.py, train.py, export_tflite.py）
+# 钉死 TF 2.19：其预编译二进制兼容 numpy 2.x，但为求二进制最稳 + 可复现，配 numpy<2。
+# 终点是 TFLite Micro，工具链必须用 TF 原生（禁止 PyTorch+ONNX 绕路）。
+tensorflow==2.19.*
+numpy<2
+# 训练时用 pandas 读 train/val/test.csv。
+pandas
