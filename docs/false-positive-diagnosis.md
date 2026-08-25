@@ -1,22 +1,23 @@
-# Task2b 阶段一 · noscreen 探针 FP 误判诊断
+# Per-image diagnosis of no-screen probe false positives
 
-> **Summary (EN).** Per-image analysis of all 235 held-out probe images (59 false positives).
-> Errors cluster by room type — office conversation 0.559, living room 0.52, meeting room
-> 0.324 — and fall to ~0 outdoors and in restaurants. False positives are brighter (+0.186)
-> and hit the screen-like-rectangle detector twice as often (+0.118), but contain *fewer*
-> faces (−0.093). This is the measurement that redirected the project away from collecting
-> more people photographs.
+Task 2b, phase one.
 
-模型：`models/task1_candidates/gatekeeper_task1_C_wide_uniform_int8.tflite`（C_wide_uniform int8，task1 胜出）　阈值 **@0.4**　口径：int8 部署预处理（cv2 灰度→resize96 INTER_AREA→量化）。
-探针：noscreen **235** 张（leak 核对剔除 0 张，按 Pexels-ID）。⚠️ 探针仅评估，**不入任何训练集**。
+Model: `models/task1_candidates/gatekeeper_task1_C_wide_uniform_int8.tflite`, the task1 winner,
+at threshold 0.4. Measured under int8 deployment preprocessing: cv2 greyscale, resize to 96
+with INTER_AREA, quantise. Probe: no-screen, 235 images, with 0 removed by the Pexels-ID
+leakage check. The probe is used for evaluation only and never enters any training set.
 
-## 总览
-- FP（被误判为「记」，score≥0.4）：**59/235 = 0.251**
-- 正确拒识：176/235
-- 全体分数：min 0.000 / median 0.160 / max 0.922
+## Overview
 
-## 按场景聚合（FP 率降序）
-| 场景（子目录） | n | FP | FP率 | 平均分 | 平均人脸数 |
+- False positives, meaning judged as record at score at or above 0.4: 59/235 = 0.251
+- Correct rejections: 176/235
+- Score distribution over all images: min 0.000, median 0.160, max 0.922
+
+## By scene
+
+Sorted by false-positive rate.
+
+| Scene (subdirectory) | n | FP | FP rate | Mean score | Mean face count |
 |---|---:|---:|---:|---:|---:|
 | office_colleagues_conversation | 34 | 19 | 0.559 | 0.457 | 0.41 |
 | family_home_living_room | 25 | 13 | 0.52 | 0.383 | 0.08 |
@@ -27,16 +28,22 @@
 | friends_cafe_group | 29 | 1 | 0.034 | 0.076 | 0.52 |
 | people_restaurant_dining | 30 | 0 | 0.0 | 0.098 | 0.23 |
 
-## FP vs 正确拒识 · 维度对比（均值）
-| 维度 | FP（n=59） | 正确拒识（n=176） | 差异 |
-|---|---:|---:|---:|
-| 亮度 | 0.601 | 0.415 | +0.186 |
-| 对比度 | 0.253 | 0.231 | +0.022 |
-| 人脸数代理 | 0.339 | 0.432 | -0.093 |
-| 类屏矩形命中率 | 0.237 | 0.119 | +0.118 |
+## False positives against correct rejections
 
-## FP 清单（score 降序，全部 59 张）
-| # | score | 场景 | 文件 | 人脸 | 亮度 | 类屏 |
+Means across each group.
+
+| Dimension | FP (n=59) | Correct rejection (n=176) | Difference |
+|---|---:|---:|---:|
+| Brightness | 0.601 | 0.415 | +0.186 |
+| Contrast | 0.253 | 0.231 | +0.022 |
+| Face-count proxy | 0.339 | 0.432 | −0.093 |
+| Screen-like rectangle hit rate | 0.237 | 0.119 | +0.118 |
+
+## Full false-positive list
+
+All 59, by descending score.
+
+| # | score | Scene | File | Faces | Brightness | Screen-like |
 |---:|---:|---|---|---:|---:|---:|
 | 1 | 0.9219 | office_colleagues_conversation | office_colleagues_conversation/office_colleagues_conversation_0024_4343205.jpeg | 0 | 0.6117 | 0 |
 | 2 | 0.9102 | office_colleagues_conversation | office_colleagues_conversation/office_colleagues_conversation_0010_4343207.jpeg | 0 | 0.6157 | 0 |
@@ -97,11 +104,12 @@
 | 57 | 0.4102 | people_street_candid | people_street_candid/people_street_candid_0016_32242667.jpeg | 0 | 0.288 | 0 |
 | 58 | 0.4023 | family_home_living_room | family_home_living_room/family_home_living_room_0013_6957830.jpeg | 0 | 0.6551 | 0 |
 | 59 | 0.4023 | group_friends_indoor_candid | group_friends_indoor_candid/group_friends_indoor_candid_0015_10782244.jpeg | 0 | 0.409 | 0 |
+## Near-threshold correct rejections
 
-## 借近阈值的「擦边正确拒识」（0.4>score≥0.32，最易翻车）
-共 9 张（这些是再补一点同类负例最可能压下去的边缘案例）：
+The 9 images scoring between 0.32 and 0.4. These are the borderline cases most likely to flip,
+and the ones a little more of the same kind of negative would most plausibly push down.
 
-| score | 场景 | 文件 |
+| score | Scene | File |
 |---:|---|---|
 | 0.3906 | family_home_living_room | family_home_living_room/family_home_living_room_0017_8583811.jpeg |
 | 0.375 | group_friends_indoor_candid | group_friends_indoor_candid/group_friends_indoor_candid_0027_10423482.jpeg |
@@ -112,42 +120,82 @@
 | 0.3398 | office_colleagues_conversation | office_colleagues_conversation/office_colleagues_conversation_0009_3867842.jpeg |
 | 0.3242 | family_home_living_room | family_home_living_room/family_home_living_room_0010_7114420.jpeg |
 | 0.3242 | people_restaurant_dining | people_restaurant_dining/people_restaurant_dining_0007_12181619.jpeg |
+## What the false positives have in common
 
----
+A note on measurement first. This diagnosis uses the seed 42 deployment artifact, a single
+model, giving FP 0.251, while the task1 report's no-screen FP of 0.331 ± 0.091 is a 5-seed
+mean. 0.251 falls inside that interval, so the single model is slightly optimistic. The
+*structure* of the errors does not depend on which model is used, so the conclusions below hold
+regardless.
 
-## 共性结论（诚实版）
+### 1. False positives concentrate in indoor office, meeting and home scenes
 
-**口径说明**：本诊断用 seed42 部署产物（单模型），FP=0.251；task1 报告的 noscreen_fp=0.331±0.091 是 5-seed 均值。
-0.251 落在该区间内，单模型偏乐观一点，但 FP 的**结构/共性**与模型无关，下述结论稳健。
+By scene the rates split into clear clusters:
 
-### 共性 1（最强、可直接落地）：FP 高度集中在「室内办公/会议/居家」场景，户外/餐饮近乎零
-按场景 FP 率清晰分两簇：
-- **高 FP 簇（0.32–0.56）**：`office_colleagues_conversation` 0.559、`family_home_living_room` 0.52、`people_meeting_room_talking` 0.324
-- **中 FP 簇（0.21–0.24）**：`coworkers_standing_meeting` 0.241、`group_friends_indoor_candid` 0.207
-- **零/低 FP 簇（0–0.08）**：`people_street_candid` 0.08、`friends_cafe_group` 0.034、`people_restaurant_dining` 0.0
+- High, 0.32 to 0.56: `office_colleagues_conversation` 0.559, `family_home_living_room` 0.52,
+  `people_meeting_room_talking` 0.324
+- Middle, 0.21 to 0.24: `coworkers_standing_meeting` 0.241, `group_friends_indoor_candid` 0.207
+- Zero to low, 0 to 0.08: `people_street_candid` 0.08, `friends_cafe_group` 0.034,
+  `people_restaurant_dining` 0.0
 
-> 模型不是被「人」骗，而是被**正类触发场景所在的室内建成环境**骗——办公室/会议室/客厅正是显示器、白板、
-> 投影、电视、文档所在地。这些房间的**亮墙、窗、画框、关闭的屏幕/白板、书架**带有「屏幕/文档相邻」的
-> 几何与亮度线索，即便画面里没有任何可读文字、且有人在场，守门员仍误触发。户外街景与餐饮（食物、暗光、
-> 无矩形屏状结构）则几乎不触发。
+The model is not being fooled by people. It is being fooled by the built indoor environments
+that the positive class lives in — offices, meeting rooms and living rooms are exactly where
+monitors, whiteboards, projectors, televisions and documents are found. Bright walls, windows,
+picture frames, switched-off screens and whiteboards, and bookshelves in those rooms carry the
+geometry and brightness cues that usually sit next to a screen or a document. The gatekeeper
+fires even when there is no readable text anywhere in the frame and a person is present.
+Outdoor street scenes and dining, which have food, dim light and no large rectangular
+screen-like structure, barely trigger at all.
 
-### 共性 2：FP 图显著更亮（+0.186），且约 2× 更可能含「类屏矩形」（+0.118）
-- 亮度：FP 0.601 vs 正确拒识 0.415（**最大单维差异**）。
-- 类屏矩形命中率：FP 0.237 vs 0.119（FP 约 2 倍）——窗/画框/关屏/白板等大块亮四边形是几何误导线索
-  （启发式、有噪声，仅群体层面成立；约 1/4 的 FP 含此线索，是**助攻**而非唯一主因）。
+### 2. False positives are brighter, and twice as likely to contain a screen-like rectangle
 
-### 共性 3（反直觉、与 task1 诊断一致）：人脸数**反相关**（−0.093），不是「人多→误触发」
-FP 图平均人脸数（0.34）反而**低于**正确拒识（0.43），多张高分 FP 检到 0 张正脸。
-→ **再排证「count-imbalance」假说**：误触发由**环境/背景**驱动，不是人数。这与 task1「真瓶颈是协变量偏移
-而非数量失衡」的结论一致，也意味着**再撒一批人像收效有限**——要补的是**那类室内环境本身 + 无文字的屏状表面**。
+Brightness is 0.601 for false positives against 0.415 for correct rejections, the largest
+single-dimension gap in the comparison.
 
-### 与 task2 设计的张力（关键，需项目决定）
-task2 的人像负例**刻意排除**了办公/会议/教室场景，理由之一是「探针偏办公/会议，训练负例若镜像探针场景，
-探针就不再是公平的 held-out 泛化测试」（见 `keywords_task2_neg_people.json` 的 `_design`）。
-本诊断恰恰证明：**那个「人≠记 会从街头/市场泛化到办公/客厅」的赌注，在室内建成环境上失败了。**
-- 含义：守门员对这些**高混淆室内场景**无法靠泛化解决，需要**同分布**覆盖。
-- 代价：一旦把办公/会议/客厅负例纳入训练，探针在这些场景上就从「held-out 泛化测试」变成「同分布测试」，
-  FP 下降里有一部分是「训过同类」而非「真泛化」。**这是方法论取舍，留给用户在阶段二定**（见 expansion_plan 的停点）。
-- 另一风险：办公/会议/客厅图**极易混入可读屏幕/白板文字**（=正类），若误标为负例会污染负类。故新关键词
-  **刻意偏向 empty/blank/off/textless**（空房间、空白白板、关闭的显示器/电视、空投影幕）以**压低污染**，
-  且**纳入训练前必须人眼 QC 剔除任何含可读文字屏的图**（task2 既定协议，无法自主完成→列为停点交接项）。
+Screen-like rectangle hit rate is 0.237 against 0.119, roughly double. Windows, picture frames,
+switched-off displays and whiteboards are large bright quadrilaterals and act as a misleading
+geometric cue. The detector is a heuristic and noisy, and the relationship only holds at the
+group level: about a quarter of the false positives carry this cue, so it is a contributing
+factor rather than the sole cause.
+
+### 3. Face count is negatively correlated (−0.093), which is the opposite of the intuition
+
+False positives average 0.34 faces against 0.43 for correct rejections, and several of the
+highest-scoring false positives contain zero detected frontal faces.
+
+This rules out the count-imbalance hypothesis again. False triggering is driven by the
+environment and the background, not by how many people are in frame. It agrees with the task1
+conclusion that the real bottleneck is covariate shift rather than a count imbalance, and it
+means scattering another batch of people photographs at the problem will achieve little. What
+needs covering is that class of indoor environment itself, together with screen-like surfaces
+that carry no text.
+
+### Tension with the task2 design
+
+This is the part that needs a decision.
+
+The people negatives added in task2 deliberately excluded office, meeting room and classroom
+scenes. One stated reason was that the probe leans toward office and meeting scenes, so
+mirroring those scenes in the training negatives would stop the probe being a fair held-out
+generalisation test. That reasoning is recorded in the `_design` field of
+`keywords_task2_neg_people.json`.
+
+This diagnosis shows the bet behind that choice did not pay off. The assumption was that
+"a person is not a reason to record" would generalise from street and market scenes to offices
+and living rooms. In built indoor environments, it did not.
+
+What follows from that:
+
+- The gatekeeper cannot reach these high-confusion indoor scenes by generalisation. They need
+  in-distribution coverage.
+- The cost is methodological. Once office, meeting room and living room negatives enter
+  training, the probe stops being a held-out generalisation test on those scenes and becomes an
+  in-distribution one, so part of any FP reduction would be "trained on this kind of image"
+  rather than genuine generalisation. This is a trade-off to be decided, not a free win.
+- There is a second risk. Office, meeting room and living room images very easily contain a
+  readable screen or whiteboard text, which would make them positives. Labelling those as
+  negatives would contaminate the negative class. The new keywords therefore lean deliberately
+  toward empty, blank, off and textless variants — empty rooms, blank whiteboards, switched-off
+  monitors and televisions, empty projector screens — to keep contamination low. Even then,
+  manual QC to remove any image containing a readable text screen is required before they enter
+  training. That is the established task2 protocol and it is a manual step.

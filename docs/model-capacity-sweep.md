@@ -1,118 +1,162 @@
-# Task1 — 增加守门员模型复杂度：baseline + 5 候选对比报告
+# Capacity sweep: baseline plus five candidate architectures
 
-> **Summary (EN).** Capacity sweep: baseline plus five candidate CNNs, 24.9k → 94.5k
-> parameters, 5 seeds each. Test F1 plateaus at 0.736–0.769; only `C_wide_uniform`
-> (16,32,64,64) gains, and only by ~1σ (+0.021). Probe false-positive rate stays at
-> 0.33–0.39 across every capacity, so more parameters do not fix covariate-shift errors.
-> All six candidates stay inside the ESP32 budget (fully int8, TFLM-whitelisted operators,
-> int8 weights ≤ 92.3 KB, peak concurrent activations ≤ 180 KB).
+Completed 2026-06-25. Protocol: 5 seeds `[42,1,7,123,2024]`, threshold 0.40, both probes
+scored across 5 seeds on int8, no depthwise-separable variants. Every metric is taken under
+ESP32 deployment conditions, meaning the exported int8 model with deployment preprocessing.
+Training ran on local CPU; the GPU libraries were not loaded, which does not affect the
+numbers.
 
-完成 2026-06-25 05:02　口径：5-seed `[42,1,7,123,2024]`、阈值 **0.40**、
-双探针 5-seed（int8）、**不加 depthwise-separable**。所有指标在 ESP32 部署口径下测得（int8 模型、部署预处理）。
-全程在本地 CPU 训练（GPU 库未加载，不影响数值）。
+All metrics here are under the narrowed MVP label definition (`docs/label-scope.md`) and are
+not directly comparable with numbers taken under the wider boundary that included ambiguous
+negatives.
 
-> 口径提示：本报告所有指标为**收窄后的「MVP 原定义口径」**（`docs/label-scope.md`），与含歧义负例的「宽边界口径」不可直接比较。
+## 0. Conclusions
 
-## 0. 关键结论（TL;DR）
+Capacity is not the current bottleneck. Sweeping parameters from 24.9k to 94.5k, a factor of
+3.8, leaves test F1 hovering on a 0.736–0.769 plateau. Most of the larger candidates (A, B, D,
+E) match or fall below baseline, and the differences are generally no larger than one seed's
+standard deviation.
 
-1. **容量不是当前瓶颈。** 把参数量从 24.9k 扫到 94.5k（**3.8×**），test F1 基本在 **0.736–0.769** 平台徘徊；
-   多数更大的候选（A/B/D/E）**持平或反而低于 baseline**，且差异普遍 ≤ 单 seed 标准差。
-2. **唯一净增益来自 `C_wide_uniform`（16,32,64,64）**：test F1 **0.7694 ± 0.0148**，比 baseline **+0.0207**（约 1σ），
-   同时 **FN 最低（0.187）**、**val F1 最高（0.770）**、**5-seed 方差最小（0.015，最稳）**、**noscreen 误触发最低（0.331）**。
-3. **真瓶颈是数据/标签，不是模型容量。** 证据：(a) 3.8× 参数扫描下 test F1 平台化；(b) 候选间差异与 seed 方差同量级；
-   (c) 双探针里 **person 误触发（noscreen FP 0.33–0.39）在所有容量下都没被压下去**——加容量治不了协变量偏移型 FP。
-4. **预算与可移植性全绿。** 6 个候选**全部全 int8（0 个 float32 张量）、算子全部在 TFLM 白名单**（仅 5 个算子）、
-   int8 权重 ≤ 92.3KB < 100KB、并发激活 ≤ 180KB < 256KB、量化掉点 |ΔF1| ≤ 0.005（可忽略）。
-5. **推荐采用 C_wide_uniform** 作为新守门员架构（见 §4），但**下一笔投入应放到数据，而非更大的模型**。
+The only net gain is `C_wide_uniform` (16,32,64,64): test F1 0.7694 ± 0.0148, which is +0.0207
+over baseline or about 1σ. It also has the lowest FN (0.187), the highest val F1 (0.770), the
+smallest 5-seed variance (0.015, so the most stable), and the lowest no-screen false-trigger
+rate (0.331).
 
-## 1. 架构 / 预算 / 可移植性（无 seed 方差）
+The real bottleneck is the data and the labels rather than model capacity. The evidence is
+that test F1 plateaus under a 3.8x parameter sweep, that between-candidate differences are the
+same size as seed variance, and that person-driven false triggering on the probe (no-screen FP
+0.33–0.39) is not pushed down at any capacity. Adding capacity does not fix covariate-shift
+errors.
 
-| 候选 | channels | conv/stg | 参数 | int8权重KB | 并发激活KB¹ | float32张量 | 算子白名单 |
+Budget and portability are clear across the board. All six candidates are fully int8 with zero
+float32 tensors, use only TFLite Micro whitelisted operators (5 distinct ones), keep int8
+weights at or below 92.3 KB against a 100 KB limit and concurrent activations at or below
+180 KB against 256 KB, and lose at most 0.005 F1 to quantisation.
+
+The recommendation is to adopt `C_wide_uniform` as the new gatekeeper architecture (section 4),
+while directing the next unit of effort at the data rather than at a larger model.
+
+## 1. Architecture, budget and portability
+
+No seed variance in this table; these are static properties.
+
+| Candidate | channels | convs/stage | Parameters | int8 weights KB | Concurrent activations KB [1] | float32 tensors | Operator whitelist |
 |---|---|---|---:|---:|---:|---:|:--:|
-| **baseline** | 8,16,32,64 | 1 | 24,874 | 24.3 | 90 | 0 | ✅ 全过 |
-| A_wide_late | 8,16,64,128 | 1 | 85,290 | 83.3 | 90 | 0 | ✅ 全过 |
-| B_deep_stack | 8,16,32,64 | 2 | 74,314 | 72.6 | 144 | 0 | ✅ 全过 |
-| **C_wide_uniform** | 16,32,64,64 | 1 | 60,882 | 59.5 | 180 | 0 | ✅ 全过 |
-| D_five_stage | 8,16,32,64,96 | 1 | 80,618 | 78.7 | 90 | 0 | ✅ 全过 |
-| E_combo | 8,16,48,64 | 1,1,2,2 | 94,506 | 92.3 | 90 | 0 | ✅ 全过 |
+| baseline | 8,16,32,64 | 1 | 24,874 | 24.3 | 90 | 0 | Pass |
+| A_wide_late | 8,16,64,128 | 1 | 85,290 | 83.3 | 90 | 0 | Pass |
+| B_deep_stack | 8,16,32,64 | 2 | 74,314 | 72.6 | 144 | 0 | Pass |
+| C_wide_uniform | 16,32,64,64 | 1 | 60,882 | 59.5 | 180 | 0 | Pass |
+| D_five_stage | 8,16,32,64,96 | 1 | 80,618 | 78.7 | 90 | 0 | Pass |
+| E_combo | 8,16,48,64 | 1,1,2,2 | 94,506 | 92.3 | 90 | 0 | Pass |
 
-¹ 并发激活峰值取自 `estimate_budget.py`（训练前静态核算）。预算上限：并发激活 **256KB** / int8 权重 **100KB**。
-算子集（全候选一致，均在 TFLM 白名单）：`AVERAGE_POOL_2D, CONV_2D, FULLY_CONNECTED, MAX_POOL_2D, SOFTMAX`。
-**全部候选预算全绿、零非白名单算子、零 float32 残留**——复杂度的引入没有牺牲可移植性。
+[1] Peak concurrent activations come from `estimate_budget.py`, computed statically before
+training. Budget ceilings are 256 KB for concurrent activations and 100 KB for int8 weights.
 
-## 2. 精度（5-seed mean ± std，test@0.40，int8 部署口径）
+The operator set is identical across candidates and entirely within the TFLite Micro
+whitelist: `AVERAGE_POOL_2D, CONV_2D, FULLY_CONNECTED, MAX_POOL_2D, SOFTMAX`. Every candidate
+clears its budget with no non-whitelisted operators and no residual float32, so adding
+complexity did not cost portability.
 
-| 候选 | 参数 | val F1 | **test F1** | ΔF1 vs base² | test FN | test FP | test recall | test acc |
+## 2. Accuracy
+
+5-seed mean ± std, test at threshold 0.40, int8 deployment measurement.
+
+| Candidate | Parameters | val F1 | test F1 | ΔF1 vs base [2] | test FN | test FP | test recall | test acc |
 |---|---:|---|---|---:|---|---|---|---|
-| **baseline** | 24.9k | 0.7611 ± 0.0302 | **0.7487 ± 0.0210** | — | 0.211 ± 0.049 | 0.240 ± 0.041 | 0.789 | 0.772 |
-| A_wide_late | 85.3k | 0.7598 ± 0.0050 | 0.7421 ± 0.0232 | **−0.0066** | 0.209 ± 0.071 | 0.256 ± 0.060 | 0.791 | 0.764 |
-| B_deep_stack | 74.3k | 0.7659 ± 0.0125 | 0.7392 ± 0.0358 | **−0.0095** | 0.238 ± 0.086 | 0.223 ± 0.058 | 0.762 | 0.771 |
-| **C_wide_uniform** | 60.9k | **0.7703 ± 0.0197** | **0.7694 ± 0.0148** | **+0.0207** | **0.187 ± 0.060** | 0.226 ± 0.054 | **0.813** | **0.791** |
-| D_five_stage | 80.6k | 0.7577 ± 0.0300 | 0.7359 ± 0.0199 | **−0.0128** | 0.221 ± 0.068 | 0.256 ± 0.093 | 0.779 | 0.759 |
-| E_combo | 94.5k | 0.7537 ± 0.0169 | 0.7357 ± 0.0208 | **−0.0130** | 0.214 ± 0.077 | 0.263 ± 0.061 | 0.786 | 0.758 |
+| baseline | 24.9k | 0.7611 ± 0.0302 | 0.7487 ± 0.0210 | — | 0.211 ± 0.049 | 0.240 ± 0.041 | 0.789 | 0.772 |
+| A_wide_late | 85.3k | 0.7598 ± 0.0050 | 0.7421 ± 0.0232 | −0.0066 | 0.209 ± 0.071 | 0.256 ± 0.060 | 0.791 | 0.764 |
+| B_deep_stack | 74.3k | 0.7659 ± 0.0125 | 0.7392 ± 0.0358 | −0.0095 | 0.238 ± 0.086 | 0.223 ± 0.058 | 0.762 | 0.771 |
+| C_wide_uniform | 60.9k | 0.7703 ± 0.0197 | 0.7694 ± 0.0148 | +0.0207 | 0.187 ± 0.060 | 0.226 ± 0.054 | 0.813 | 0.791 |
+| D_five_stage | 80.6k | 0.7577 ± 0.0300 | 0.7359 ± 0.0199 | −0.0128 | 0.221 ± 0.068 | 0.256 ± 0.093 | 0.779 | 0.759 |
+| E_combo | 94.5k | 0.7537 ± 0.0169 | 0.7357 ± 0.0208 | −0.0130 | 0.214 ± 0.077 | 0.263 ± 0.061 | 0.786 | 0.758 |
 
-² ΔF1 = (候选 test F1 mean) − (baseline test F1 mean = 0.7487)。**只有 C 为正**；其余均在噪声内为负。
+[2] ΔF1 is the candidate's mean test F1 minus baseline's (0.7487). Only C is positive; the
+rest are negative and within noise.
 
-## 3. 双探针（int8）+ 量化掉点 + 性价比
+## 3. Both probes, quantisation loss, and value for money
 
-探针为 held-out 真实照片，已按 Pexels-ID 防泄漏核对（noscreen **235** 张 leak 0 / screen **181** 张 leak 0）。
+The probes are held-out real photographs, checked for leakage by Pexels ID: no-screen 235
+images with 0 leaked, screen 181 images with 0 leaked.
 
-| 候选 | noscreen FP³ ↓ | screen recall⁴ ↑ | 量化 ΔF1(int8−keras) | 参数倍数 vs base | 性价比判定 |
+| Candidate | noscreen FP [3], lower better | screen recall [4], higher better | Quantisation ΔF1 (int8 − keras) | Parameter multiple vs base | Verdict |
 |---|---|---|---:|---:|---|
-| **baseline** | 0.361 ± 0.053 | 0.625 ± 0.058 | −0.004 | 1.0× | 参照 |
-| A_wide_late | 0.391 ± 0.097 | 0.645 ± 0.095 | +0.005 | 3.4× | ❌ 负收益、激活无增、白吃 3.4× 权重 |
-| B_deep_stack | 0.346 ± 0.081 | 0.600 ± 0.083 | −0.001 | 3.0× | ❌ test F1↓、激活翻到 144KB |
-| **C_wide_uniform** | **0.331 ± 0.091** | 0.582 ± 0.095 | −0.001 | 2.4× | ✅ **唯一正收益**；+0.021 F1 / 2.4× 参数 |
-| D_five_stage | 0.375 ± 0.120 | 0.600 ± 0.124 | +0.001 | 3.2× | ❌ test F1 最低之一、方差大 |
-| E_combo | 0.392 ± 0.108 | 0.635 ± 0.099 | +0.001 | 3.8× | ❌ 最大模型、最差 test F1、逼近权重上限 |
+| baseline | 0.361 ± 0.053 | 0.625 ± 0.058 | −0.004 | 1.0x | Reference |
+| A_wide_late | 0.391 ± 0.097 | 0.645 ± 0.095 | +0.005 | 3.4x | Net negative, no activation increase, 3.4x the weights for nothing |
+| B_deep_stack | 0.346 ± 0.081 | 0.600 ± 0.083 | −0.001 | 3.0x | test F1 down, activations double to 144 KB |
+| C_wide_uniform | 0.331 ± 0.091 | 0.582 ± 0.095 | −0.001 | 2.4x | The only net gain: +0.021 F1 for 2.4x parameters |
+| D_five_stage | 0.375 ± 0.120 | 0.600 ± 0.124 | +0.001 | 3.2x | Among the lowest test F1, high variance |
+| E_combo | 0.392 ± 0.108 | 0.635 ± 0.099 | +0.001 | 3.8x | Largest model, worst test F1, close to the weight ceiling |
 
-³ noscreen FP = 真实「有人无屏」照片被判「记」的比例（越低越好，反映 person 误触发）。
-⁴ screen recall = 真实「人+有用文字屏」被判「记」的比例（越高越好）。
-量化掉点全候选 **|ΔF1| ≤ 0.005**，int8 导出无明显精度损失。
+[3] noscreen FP is the fraction of real "people, no screen" photographs judged as record.
+Lower is better; it measures person-driven false triggering.
+[4] screen recall is the fraction of real "people plus a useful text screen" photographs judged
+as record. Higher is better.
 
-## 4. 推荐
+Quantisation loss is within 0.005 F1 for every candidate, so int8 export costs no meaningful
+accuracy.
 
-**采用 `C_wide_uniform`（channels=16,32,64,64, conv/stg=1, 60.9k 参数）作为新守门员架构。**
+## 4. Recommendation
 
-理由（多指标一致，非单点运气）：
-- **唯一在 test F1 上净超 baseline** 的候选（0.7694 vs 0.7487, +0.0207）。
-- **5-seed 方差最小（±0.0148）**——不仅更准，而且**最稳定**（baseline ±0.021，其余更大）。
-- **FN 最低（0.187）**、**recall 最高（0.813）**、**val F1 最高（0.770）**、**noscreen 误触发最低（0.331）**——
-  四项关键指标同时领先，降低了「只是某个 seed 撞运气」的概率。
-- **预算全绿**：int8 权重 59.5KB < 100、并发激活 180KB < 256、全白名单、量化掉点 −0.001 可忽略。
-- seed42 部署产物已存 `models/task1_candidates/gatekeeper_task1_C_wide_uniform{.keras,_int8.tflite}`。
+Adopt `C_wide_uniform` (channels 16,32,64,64, 1 conv per stage, 60.9k parameters) as the new
+gatekeeper architecture.
 
-**坦诚边界**：+0.0207 仅约 **1σ**，不是大幅领先；C 的代价是并发激活升到 180KB（候选中最高，因早层加宽
-在高空间分辨率上更吃激活内存），仍在 256KB 预算内但余量收窄。**把它当作"预算内当前最优配置"，而不是
-"复杂度解决了准确率问题"的证据。**
+Several metrics agree, which makes this less likely to be a single lucky seed:
 
-## 5. 真瓶颈判断：数据/标签 ≫ 模型容量
+- The only candidate that beats baseline on test F1 (0.7694 against 0.7487, +0.0207).
+- The smallest 5-seed variance at ±0.0148, so it is not only more accurate but the most stable
+  (baseline is ±0.021 and the rest are wider).
+- Lowest FN (0.187), highest recall (0.813), highest val F1 (0.770) and lowest no-screen false
+  triggering (0.331) — four key metrics leading at once.
+- Budget is clear: int8 weights 59.5 KB against 100, concurrent activations 180 KB against 256,
+  all operators whitelisted, quantisation loss −0.001 and negligible.
+- The seed 42 deployment artifacts are saved at
+  `models/task1_candidates/gatekeeper_task1_C_wide_uniform{.keras,_int8.tflite}`.
 
-把参数量扫了 **3.8×**（24.9k→94.5k），得到的事实：
+The caveat, stated plainly: +0.0207 is only about 1σ, not a decisive lead. C also costs
+activation memory, rising to 180 KB, the highest of the candidates, because widening the early
+layers is expensive at high spatial resolution. That is still inside the 256 KB budget but the
+headroom is narrower. Treat C as the best configuration available inside the budget, not as
+evidence that complexity solved the accuracy problem.
 
-1. **test F1 平台化在 0.736–0.769。** 最大的三个模型（A 85k / D 81k / E 95k）全部 **≤ baseline**。
-   若瓶颈是容量，单调放大应单调收益——实际是平台 + 噪声。
-2. **候选间差异 ≈ seed 方差。** 多数 ΔF1（−0.013 ~ +0.021）落在单 seed std（0.015–0.036）量级内，
-   统计上难与噪声区分；唯一可信的正信号 C 也只有 ~1σ。
-3. **加容量治不了 person 误触发。** noscreen FP 在所有容量下都卡在 **0.33–0.39**——这是 task2 诊断过的
-   **协变量偏移（covariate shift）**型错误，本质是训练分布里"有人无屏"覆盖不足，**靠更大模型无法修复**。
-4. **加宽早层（C）略有效、加宽晚层/加深/加阶段（A/B/D/E）无效** 的模式说明：模型对低层纹理/边缘特征
-   *轻微*欠资源，但这点边际容量收益很快被数据天花板吞没。
+## 5. Why the bottleneck is data and labels rather than capacity
 
-**结论：守门员当前的准确率天花板由数据与标签质量决定，不是参数量。**
-继续堆容量是低性价比方向。下一笔投入应转向**数据**：
-- 针对性扩充"有人无屏"（noscreen）负例，直接压 person 误触发（noscreen FP 0.33–0.39 是最大单项短板）；
-- 复核"人+有用文字屏"正例覆盖与 screen_recall（0.58–0.65，偏低）；
-- 在 C_wide_uniform 这个"预算内最优、最稳"的架构上做后续数据实验，作为新的对照基线。
+Sweeping parameters 3.8x, from 24.9k to 94.5k, produced these facts.
 
-## 附：复现
+1. Test F1 plateaus at 0.736–0.769, and the three largest models (A at 85k, D at 81k, E at 95k)
+   are all at or below baseline. If capacity were the constraint, scaling monotonically should
+   pay off monotonically. Instead there is a plateau plus noise.
+2. Between-candidate differences are about the size of seed variance. Most ΔF1 values, from
+   −0.013 to +0.021, fall inside single-seed std of 0.015 to 0.036, which is statistically hard
+   to separate from noise. Even C, the only credible positive signal, is about 1σ.
+3. Capacity does not fix person-driven false triggering. No-screen FP is stuck at 0.33–0.39 at
+   every capacity. That is the covariate-shift error diagnosed during task2 — the training
+   distribution under-covers "people, no screen" — and a bigger model cannot repair it.
+4. The pattern that widening early layers (C) helps slightly while widening late layers,
+   deepening, or adding stages (A, B, D, E) does not, suggests the model is *mildly*
+   under-resourced for low-level texture and edge features. That marginal gain is quickly
+   absorbed by the data ceiling.
+
+The gatekeeper's accuracy ceiling is set by data and label quality, not by parameter count.
+Continuing to stack capacity is poor value. The next investment should go to the data:
+
+- Targeted expansion of "people, no screen" negatives to push down person-driven false
+  triggering, since no-screen FP at 0.33–0.39 is the single largest weakness.
+- Review coverage of "people plus a useful text screen" positives and screen recall, which is
+  low at 0.58–0.65.
+- Run subsequent data experiments on `C_wide_uniform`, the most accurate and most stable
+  architecture inside the budget, as the new control baseline.
+
+## Appendix: reproducing this
 
 ```bash
-# 单候选 5-seed 全程流水线（训练→test@0.40→int8 导出+白名单+ΔF1→双探针）
+# Full 5-seed pipeline for one candidate
+# (train, test at 0.40, int8 export with whitelist and ΔF1 checks, both probes)
 PYTHONPATH=scripts .venv/bin/python scripts/run_candidate.py \
     --tag C_wide_uniform --channels 16,32,64,64 --convs 1
-# 结果 JSON：docs/results/task1_results/<tag>.json　模型：models/task1_candidates/（gitignored）
+# Result JSON: docs/results/task1_results/<tag>.json
+# Models: models/task1_candidates/ (gitignored)
 ```
 
-数据来源标注：本报告所有数字均为本机 5-seed 实测（`docs/results/task1_results/*.json`），非设计期估计；
-预算列取自 `scripts/estimate_budget.py` 静态核算。
+Provenance: every number here was measured on this machine across 5 seeds
+(`docs/results/task1_results/*.json`), not estimated at design time. The budget columns come
+from the static analysis in `scripts/estimate_budget.py`.

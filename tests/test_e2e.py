@@ -1,7 +1,8 @@
-"""M5: 端到端冒烟测试。
+"""M5: end-to-end smoke tests.
 
-mock 触发 → 测试图 → OCR(Stub，保证无 tesseract 二进制也能跑) → mock enrich
-→ 存 → 查得到。另测断网入队→恢复补传的 e2e，以及 raw_image_policy 删除/缓存。
+Mocked trigger, test image, StubOCR (so this runs without the tesseract binary), mocked
+enrichment, store, then recall. Also covers the offline-queue to recovery-backfill path end to
+end, and the delete and cache behaviour of raw_image_policy.
 """
 
 import tempfile
@@ -46,15 +47,15 @@ class TestEndToEnd(unittest.TestCase):
         pipe = build_pipeline(
             cfg=self.cfg,
             connectivity=ConnectivityMock(online=True),
-            ocr=StubOCR(fixed_text="季度路线图 白板 roadmap"),
+            ocr=StubOCR(fixed_text="quarterly plan whiteboard roadmap"),
         )
         try:
             card = pipe.capture(self.img, trigger_confidence=0.92)
             self.assertIsNotNone(card)
             self.assertEqual(card.status, "done")
-            self.assertTrue(card.tags)                 # mock tags 补上
+            self.assertTrue(card.tags)                 # mock tags were filled in
             self.assertIsNotNone(card.enriched_at)
-            # 可回忆：按 OCR 文本关键词搜得到
+            # Recall works: searching a keyword from the OCR text finds it
             hits = pipe.store.search("roadmap")
             self.assertEqual(len(hits), 1)
             self.assertEqual(hits[0].id, card.id)
@@ -64,7 +65,7 @@ class TestEndToEnd(unittest.TestCase):
     def test_gatekeeper_no_trigger_records_nothing(self):
         pipe = build_pipeline(cfg=self.cfg, ocr=StubOCR(fixed_text="x"))
         try:
-            card = pipe.capture(self.img, trigger_confidence=0.1)  # < 阈值 0.5
+            card = pipe.capture(self.img, trigger_confidence=0.1)  # below the 0.5 threshold
             self.assertIsNone(card)
             self.assertEqual(pipe.store.count(), 0)
         finally:
@@ -73,7 +74,7 @@ class TestEndToEnd(unittest.TestCase):
     def test_offline_then_recovery_e2e(self):
         conn = ConnectivityMock(online=False)
         pipe = build_pipeline(cfg=self.cfg, connectivity=conn,
-                              ocr=StubOCR(fixed_text="断网时拍的白板"))
+                              ocr=StubOCR(fixed_text="whiteboard captured while offline"))
         try:
             card = pipe.capture(self.img, trigger_confidence=0.88)
             self.assertEqual(card.status, "pending")
@@ -92,9 +93,9 @@ class TestEndToEnd(unittest.TestCase):
     def test_raw_image_deleted_by_default(self):
         pipe = build_pipeline(cfg=self.cfg, ocr=StubOCR(fixed_text="t"))
         try:
-            pipe.capture(self.img, trigger_confidence=0.9)  # policy 默认 delete
+            pipe.capture(self.img, trigger_confidence=0.9)  # the policy defaults to delete
             frames = list(Path(self.cfg.frames_dir).glob("frame_*"))
-            self.assertEqual(frames, [])                    # 原始帧已删除
+            self.assertEqual(frames, [])                    # the raw frame was deleted
             cached = list(Path(self.cfg.cache_dir).glob("*"))
             self.assertEqual(cached, [])
         finally:
@@ -105,9 +106,9 @@ class TestEndToEnd(unittest.TestCase):
         try:
             pipe.capture(self.img, trigger_confidence=0.9, raw_image_policy="cache")
             cached = list(Path(self.cfg.cache_dir).glob("frame_*"))
-            self.assertEqual(len(cached), 1)                # 缓存里留了一帧
+            self.assertEqual(len(cached), 1)                # one frame was kept in the cache
             frames = list(Path(self.cfg.frames_dir).glob("frame_*"))
-            self.assertEqual(frames, [])                    # 已从 frames_dir 移走
+            self.assertEqual(frames, [])                    # and moved out of frames_dir
         finally:
             pipe.close()
 

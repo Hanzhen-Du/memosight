@@ -1,19 +1,19 @@
-# 探针集误触发测试（probe FP audit）
-> 直接量「真实有人、无屏幕文字」场景下守门员的误触发率(FP)。每张探针图按定义都该「不记」，任何「记」都是 FP。**仅诊断，未重训、未改数据。**
+# Probe false-trigger audit
+> Measures the gatekeeper's false-trigger rate directly on real "people present, no screen text" scenes. By definition every probe image should be judged do-not-record, so any record is a false positive. Diagnostic only: nothing was retrained and no data was changed.
 
-## 方法
-- 探针目录：`data/probe_person_noscreen/`（gitignored）。预处理=部署口径（cv2 灰度→resize96 INTER_AREA→/255；int8 再量化）。
-- 防泄漏：Pexels-ID(文件名) + 感知哈希(pHash≤阈 且 像素相关≥阈，复用 `check_leakage` 同口径) 双重核对，剔除与 train/val/test 撞图/近重复的探针。
-- 两个守门员：`keras(float)` 与 `int8(.tflite)`（自含 int8 运行时，口径复刻 `hardware/infer.py` 部署预处理）。部署阈值 0.55，另列 0.5/0.7/0.9。
+## Method
+- Probe directory: `data/probe_person_noscreen/` (gitignored). Preprocessing matches deployment: cv2 greyscale, resize to 96 with INTER_AREA, divide by 255, then quantise for int8.
+- Leakage control: a double check by Pexels ID from the filename and by perceptual hash (pHash within threshold and pixel correlation above threshold, reusing the same criteria as `check_leakage`), removing any probe image that collides with or near-duplicates train, val or test.
+- Two gatekeepers are scored: `keras (float)` and `int8 (.tflite)`, the latter with a self-contained int8 runtime reproducing the deployment preprocessing in `hardware/infer.py`. Deployment threshold 0.55; 0.5, 0.7 and 0.9 are also listed.
 
-## 1. 防泄漏核对
-- 探针总数 235；剔除泄漏 0 张（Pexels-ID 撞 0 / 感知近重复 0）；**干净探针 235 张**用于 FP 测。
+## 1. Leakage check
+- Probe images: 235. Removed as leaked: 0 (Pexels ID collisions 0, perceptual near-duplicates 0). Clean probe set: 235 images, used for the FP measurement.
 
-## 2. 误触发率（FP）—— 干净探针，GT 全=不记
+## 2. False-trigger rate on the clean probe set (ground truth is do-not-record throughout)
 
 **keras(float)**
 
-| 阈值 | 判「记」/总数 | FP 率 |
+| Threshold | Judged record / total | FP rate |
 |---|---|---|
 | 0.25 | 97/235 | **41.3%** |
 | 0.3 | 78/235 | **33.2%** |
@@ -21,7 +21,7 @@
 | 0.4 | 60/235 | **25.5%** |
 | 0.45 | 52/235 | **22.1%** |
 | 0.5 | 43/235 | **18.3%** |
-| 0.55 | 40/235 | **17.0%**  ← 部署 |
+| 0.55 | 40/235 | **17.0%**  (deployment) |
 | 0.6 | 31/235 | **13.2%** |
 | 0.65 | 27/235 | **11.5%** |
 | 0.7 | 19/235 | **8.1%** |
@@ -29,7 +29,7 @@
 
 **int8(.tflite)**
 
-| 阈值 | 判「记」/总数 | FP 率 |
+| Threshold | Judged record / total | FP rate |
 |---|---|---|
 | 0.25 | 93/235 | **39.6%** |
 | 0.3 | 71/235 | **30.2%** |
@@ -37,16 +37,16 @@
 | 0.4 | 59/235 | **25.1%** |
 | 0.45 | 47/235 | **20.0%** |
 | 0.5 | 43/235 | **18.3%** |
-| 0.55 | 34/235 | **14.5%**  ← 部署 |
+| 0.55 | 34/235 | **14.5%**  (deployment) |
 | 0.6 | 29/235 | **12.3%** |
 | 0.65 | 24/235 | **10.2%** |
 | 0.7 | 16/235 | **6.8%** |
 | 0.75 | 12/235 | **5.1%** |
 
-## 3. FP 案例（人眼复核）
-- 拼图：`data/processed/probe_person_noscreen_audit_cwu/montage_fp_cases.png`（红字=p(记)）
-- Grad-CAM：未产出（--no-gradcam）。
+## 3. False-positive cases for manual review
+- Montage: `data/processed/probe_person_noscreen_audit_cwu/montage_fp_cases.png` (red text is the probability of record)
+- Grad-CAM: not produced (--no-gradcam).
 
-## 4. 读数
-- int8 部署阈值(0.55)下 FP **14.5%**：**中等**。有一定语境偏移，值得补多样化的实景人像负例；同时核对 FP 案例是否多为「半屏/反光」等边界图。
-- keras 与 int8 的 FP 若明显不同，说明量化改变了工作点，部署阈值需按 int8 重标。
+## 4. Reading
+- At the int8 deployment threshold of 0.55, FP is **14.5%**, which is moderate. There is some context shift, so more diverse real-scene people negatives are worth adding. Also check whether the false-positive cases are mostly borderline images such as partially visible screens or reflections.
+- If keras and int8 FP differ noticeably, quantisation has moved the operating point and the deployment threshold must be re-calibrated against int8.

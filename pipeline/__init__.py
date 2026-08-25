@@ -1,9 +1,10 @@
-"""MemoSight MVP pipeline (阶段一).
+"""MemoSight MVP pipeline, phase one.
 
-守门员触发(mock) → 高清帧(测试图) → 本地 OCR → 打包 → 云端 enricher(mock 生成 tags)
-→ SQLite 存储 → 命令行查询。
+Gatekeeper trigger (mocked) -> full-resolution frame (a test image) -> local OCR -> packaging
+-> cloud enricher (mocked tags) -> SQLite storage -> command-line recall.
 
-三个可替换接口，各自独立模块 + 抽象基类：OCR / Enricher / Transport。
+Three swappable interfaces, each its own module with an abstract base class: OCR, Enricher and
+Transport.
 """
 
 __all__ = ["models", "db", "config"]

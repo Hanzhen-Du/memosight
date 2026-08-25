@@ -1,17 +1,34 @@
 #!/usr/bin/env python3
-"""Task2b 阶段一 · 误判诊断：C_wide_uniform(int8) 在 noscreen 探针 @0.40 的 FP 共性分析。
+"""Task 2b, phase one. Diagnose what the false positives have in common: C_wide_uniform int8
+on the noscreen probe at threshold 0.40.
 
-只读、不重训、低内存（逐图处理，全分辨率单图读入后立即降采样并释放，绝不整批驻留全分辨率）。
-对 noscreen 探针每张图提取可分析维度：
-  - 预测分数（int8 部署口径，cv2 灰度→resize96 INTER_AREA→量化，与 probe_fp_test 一致）
-  - 场景标签（来自子目录名）
-  - 亮度 mean / 对比度 std（96 灰度，[0,1]）
-  - 人脸数代理（Haar frontalface，在 ≤320px 灰度上跑；仅作粗略「人数/正脸」信号）
-  - 类屏矩形信号（在 ≤256px 灰度上找大面积亮四边形轮廓；noscreen 本无屏，命中即"几何误导线索"）
-按 @0.40 切 FP（score≥0.40）。导出 FP 清单+分数、按场景聚合、FP vs 正确拒识的维度对比。
-写 docs/false-positive-diagnosis.md + docs/results/task2b_results/noscreen_fp_per_image.csv。
+Read-only, no retraining, and low memory. Images are processed one at a time; each
+full-resolution image is downsampled and released immediately, and the full-resolution batch is
+never held in memory.
 
-防泄漏：探针仅用于评估，绝不进训练；这里只读不写训练集。仍按 Pexels-ID 核对探针与训练池无撞图（应=0）。
+For every image on the noscreen probe it extracts:
+  - the prediction score, under int8 deployment conditions (cv2 greyscale, resize to 96 with
+    INTER_AREA, quantise), matching probe_fp_test;
+  - the scene label, taken from the subdirectory name;
+  - brightness as the mean and contrast as the standard deviation, over the 96 greyscale in
+    [0,1];
+  - a face-count proxy (Haar frontal face, run on greyscale at 320px or less). This is only a
+    rough signal for how many people or frontal faces are present;
+  - a screen-like rectangle signal, found by looking for large bright quadrilateral contours in
+    greyscale at 256px or less. There is no screen anywhere on the noscreen probe, so a hit is
+    a misleading geometric cue.
+
+False positives are cut at 0.40 (score >= 0.40). It exports the FP list with scores, an
+aggregation by scene, and a dimension-by-dimension comparison of false positives against
+correct rejections.
+
+Writes docs/false-positive-diagnosis.md and
+docs/results/task2b_results/noscreen_fp_per_image.csv.
+
+Leakage control: the probe is used for evaluation only and never enters training; this script
+only reads. It still checks by Pexels ID that the probe does not collide with the training
+pool, which should be zero.
+
 """
 from __future__ import annotations
 
@@ -39,7 +56,8 @@ _FACE = cv2.CascadeClassifier(
 
 
 def scene_of(path: Path) -> str:
-    """场景标签 = 探针子目录名（noscreen 下每个子目录是一类人像场景）。"""
+    """The scene label is the probe subdirectory name; each subdirectory under noscreen is one
+    kind of scene."""
     rel = path.relative_to(PROBE)
     return rel.parts[0] if len(rel.parts) > 1 else "(root)"
 
@@ -60,10 +78,12 @@ def face_count(gray_small: np.ndarray) -> int:
 
 
 def screen_like_rect(gray_small: np.ndarray) -> int:
-    """粗检大面积亮四边形区域（窗/框/合盖笔电/门洞等几何误导线索）。命中返回 1。
+    """Roughly detect large bright quadrilateral regions: windows, frames, closed laptops,
+    doorways, all misleading geometric cues. Returns 1 on a hit.
 
-    启发式、有噪声：阈值二值化→找轮廓→approxPolyDP 取 4 角凸多边形，
-    面积 ≥ 全图 8% 且亮度高于全局中位数。仅作群体层面信号，不作单图判据。
+    Heuristic and noisy: threshold, find contours, keep convex 4-corner polygons from
+    approxPolyDP with an area of at least 8% of the frame and brightness above the global
+    median. It is a group-level signal only and is not evidence about any single image.
     """
     h, w = gray_small.shape[:2]
     area = h * w
@@ -81,7 +101,7 @@ def screen_like_rect(gray_small: np.ndarray) -> int:
 
 
 def main() -> int:
-    assert MODEL.exists(), f"模型不存在: {MODEL}"
+    assert MODEL.exists(), f"model does not exist: {MODEL}"
     interp = load_int8(MODEL)
     mids = manifest_id_set(LEAK_MANIFEST)
 
@@ -97,7 +117,7 @@ def main() -> int:
         g96 = cv2.resize(full, (INPUT_SIZE, INPUT_SIZE), interpolation=cv2.INTER_AREA)
         g_face = _resize_max(full, 320)
         g_rect = _resize_max(full, 256)
-        del full  # 立即释放全分辨率，内存只持单图瞬时
+        del full  # release the full-resolution image at once; memory holds one image briefly
         score = float(int8_predict_one(interp, g96))
         rows.append({
             "file": str(p.relative_to(PROBE)),
@@ -119,7 +139,7 @@ def main() -> int:
         w.writeheader()
         w.writerows(sorted(rows, key=lambda r: -r["score"]))
 
-    # 按场景聚合
+    # Aggregate by scene
     scenes = sorted({r["scene"] for r in rows})
     per_scene = []
     for s in scenes:
@@ -136,51 +156,59 @@ def main() -> int:
     def mean(key, sub):
         return round(float(np.mean([r[key] for r in sub])), 3) if sub else 0.0
 
-    # ── 写 markdown ──
+    # -- write the markdown report --
     L = []
-    L.append("# Task2b 阶段一 · noscreen 探针 FP 误判诊断\n")
-    L.append(f"模型：`{MODEL}`（C_wide_uniform int8，task1 胜出）　阈值 **@{THR}**　"
-             f"口径：int8 部署预处理（cv2 灰度→resize96 INTER_AREA→量化）。\n")
-    L.append(f"探针：noscreen **{n}** 张（leak 核对剔除 {leaked} 张，按 Pexels-ID）。"
-             f"⚠️ 探针仅评估，**不入任何训练集**。\n")
-    L.append(f"\n## 总览\n")
-    L.append(f"- FP（被误判为「记」，score≥{THR}）：**{len(fps)}/{n} = {len(fps)/n:.3f}**\n")
-    L.append(f"- 正确拒识：{len(crs)}/{n}\n")
-    L.append(f"- 全体分数：min {min(r['score'] for r in rows):.3f} / "
+    L.append("# Per-image diagnosis of no-screen probe false positives\n")
+    L.append(f"Model: `{MODEL}`, the task1 winner C_wide_uniform in int8, at threshold {THR}. "
+             f"Measured under int8 deployment preprocessing: cv2 greyscale, resize to 96 with "
+             f"INTER_AREA, quantise.\n")
+    L.append(f"Probe: noscreen, {n} images, with {leaked} removed by the Pexels-ID leakage "
+             f"check. The probe is used for evaluation only and never enters any training "
+             f"set.\n")
+    L.append("\n## Overview\n")
+    L.append(f"- False positives, judged as record at score >= {THR}: "
+             f"{len(fps)}/{n} = {len(fps)/n:.3f}\n")
+    L.append(f"- Correct rejections: {len(crs)}/{n}\n")
+    L.append(f"- Score distribution: min {min(r['score'] for r in rows):.3f} / "
              f"median {np.median([r['score'] for r in rows]):.3f} / "
              f"max {max(r['score'] for r in rows):.3f}\n")
 
-    L.append(f"\n## 按场景聚合（FP 率降序）\n")
-    L.append("| 场景（子目录） | n | FP | FP率 | 平均分 | 平均人脸数 |\n|---|---:|---:|---:|---:|---:|\n")
+    L.append("\n## By scene, sorted by false-positive rate\n")
+    L.append("| Scene (subdirectory) | n | FP | FP rate | Mean score | Mean face count |\n"
+             "|---|---:|---:|---:|---:|---:|\n")
     for d in per_scene:
         L.append(f"| {d['scene']} | {d['n']} | {d['fp']} | {d['fp_rate']} | "
                  f"{d['mean_score']} | {d['faces_mean']} |\n")
 
-    L.append(f"\n## FP vs 正确拒识 · 维度对比（均值）\n")
-    L.append("| 维度 | FP（n={}） | 正确拒识（n={}） | 差异 |\n|---|---:|---:|---:|\n"
+    L.append("\n## False positives against correct rejections, means\n")
+    L.append("| Dimension | FP (n={}) | Correct rejection (n={}) | Difference |\n|---|---:|---:|---:|\n"
              .format(len(fps), len(crs)))
-    for key, label in [("brightness", "亮度"), ("contrast", "对比度"),
-                       ("faces", "人脸数代理"), ("screen_rect", "类屏矩形命中率")]:
+    for key, label in [("brightness", "Brightness"), ("contrast", "Contrast"),
+                       ("faces", "Face-count proxy"),
+                       ("screen_rect", "Screen-like rectangle hit rate")]:
         a, b = mean(key, fps), mean(key, crs)
         L.append(f"| {label} | {a} | {b} | {round(a-b,3):+} |\n")
 
-    L.append(f"\n## FP 清单（score 降序，全部 {len(fps)} 张）\n")
-    L.append("| # | score | 场景 | 文件 | 人脸 | 亮度 | 类屏 |\n|---:|---:|---|---|---:|---:|---:|\n")
+    L.append(f"\n## Full false-positive list, all {len(fps)}, by descending score\n")
+    L.append("| # | score | Scene | File | Faces | Brightness | Screen-like |\n"
+             "|---:|---:|---|---|---:|---:|---:|\n")
     for i, r in enumerate(sorted(fps, key=lambda r: -r["score"]), 1):
         L.append(f"| {i} | {r['score']} | {r['scene']} | {r['file']} | "
                  f"{r['faces']} | {r['brightness']} | {r['screen_rect']} |\n")
 
-    L.append(f"\n## 借近阈值的「擦边正确拒识」（{THR}>score≥{THR-0.08:.2f}，最易翻车）\n")
+    L.append(f"\n## Near-threshold correct rejections "
+             f"({THR} > score >= {THR-0.08:.2f})\n")
     near = sorted([r for r in crs if r["score"] >= THR - 0.08], key=lambda r: -r["score"])
-    L.append(f"共 {len(near)} 张（这些是再补一点同类负例最可能压下去的边缘案例）：\n\n")
-    L.append("| score | 场景 | 文件 |\n|---:|---|---|\n")
+    L.append(f"{len(near)} images. These are the borderline cases a little more of the same kind "
+             "of negative would most plausibly push down.\n\n")
+    L.append("| score | Scene | File |\n|---:|---|---|\n")
     for r in near:
         L.append(f"| {r['score']} | {r['scene']} | {r['file']} |\n")
 
     OUT_MD.write_text("".join(L), encoding="utf-8")
 
     print(f"[diag] n={n} leak={leaked} FP={len(fps)} ({len(fps)/n:.3f}) → {OUT_MD}")
-    print("[diag] per-scene FP率:", {d["scene"]: d["fp_rate"] for d in per_scene})
+    print("[diag] per-scene FP rate:", {d["scene"]: d["fp_rate"] for d in per_scene})
     print(f"[diag] CSV → {OUT_CSV}")
     return 0
 

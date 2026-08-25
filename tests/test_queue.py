@@ -1,4 +1,4 @@
-"""M4: 断网队列三条路径 + transport/connectivity 测试。"""
+"""M4: tests for the three offline-queue paths, plus transport and connectivity."""
 
 import tempfile
 import unittest
@@ -13,7 +13,7 @@ from pipeline.packaging import build_payload
 from pipeline.transport import DirectUploadMock
 
 
-def make_payload(text="设计评审 白板", conf=0.9):
+def make_payload(text="design review whiteboard", conf=0.9):
     return build_payload(text, "2026-07-06T10:00:00+00:00", conf)
 
 
@@ -30,7 +30,7 @@ class TestQueuePaths(unittest.TestCase):
         self.store.close()
         self.tmp.cleanup()
 
-    # 路径 1：联网直存
+    # Path 1: online, stored directly
     def test_online_stores_done_with_tags(self):
         card = self.svc.ingest(make_payload())
         self.assertEqual(card.status, config.STATUS_DONE)
@@ -39,7 +39,7 @@ class TestQueuePaths(unittest.TestCase):
         self.assertEqual(self.store.count(config.STATUS_PENDING), 0)
         self.assertEqual(self.store.count(config.STATUS_DONE), 1)
 
-    # 路径 2：断网入队
+    # Path 2: offline, queued
     def test_offline_queues_pending_without_tags(self):
         self.conn.go_offline()
         card = self.svc.ingest(make_payload())
@@ -48,18 +48,18 @@ class TestQueuePaths(unittest.TestCase):
         self.assertIsNone(card.enriched_at)
         self.assertEqual(self.store.count(config.STATUS_PENDING), 1)
 
-    # 路径 3：恢复联网批量补传
+    # Path 3: bulk backfill once connectivity returns
     def test_recovery_backfills_all_pending(self):
         self.conn.go_offline()
-        self.svc.ingest(make_payload("卡片A"))
-        self.svc.ingest(make_payload("卡片B"))
+        self.svc.ingest(make_payload("card A"))
+        self.svc.ingest(make_payload("card B"))
         self.assertEqual(self.store.count(config.STATUS_PENDING), 2)
 
-        # 断网时补传应为 no-op
+        # Backfilling while offline should be a no-op
         self.assertEqual(self.svc.process_pending(), [])
         self.assertEqual(self.store.count(config.STATUS_PENDING), 2)
 
-        # 恢复联网 → 批量补齐
+        # Back online, so the queue is backfilled
         self.conn.go_online()
         done = self.svc.process_pending()
         self.assertEqual(len(done), 2)
@@ -70,7 +70,8 @@ class TestQueuePaths(unittest.TestCase):
         self.assertEqual(self.store.count(config.STATUS_PENDING), 0)
         self.assertEqual(self.store.count(config.STATUS_DONE), 2)
 
-    # 云端失败：联网但 enricher 抛错 → 回退入队，不伪造 tags
+    # Cloud failure: online but the enricher raises, so it falls back to queuing and never
+    # fabricates tags
     def test_cloud_failure_falls_back_to_queue(self):
         failing = IngestService(
             self.store, DirectUploadMock(MockCloudEnricher(fail=True)), self.conn
@@ -80,7 +81,7 @@ class TestQueuePaths(unittest.TestCase):
         self.assertIsNone(card.tags)
         self.assertEqual(self.store.count(config.STATUS_PENDING), 1)
 
-    # 云端失败的 pending 在补传时也不被误标 done
+    # A card left pending by a cloud failure must not be wrongly marked done during backfill
     def test_recovery_leaves_failing_cloud_pending(self):
         self.conn.go_offline()
         self.svc.ingest(make_payload())
@@ -98,7 +99,7 @@ class TestTransport(unittest.TestCase):
         card = tr.upload(make_payload())
         self.assertEqual(card.status, config.STATUS_DONE)
         self.assertEqual(card.tags, ["a"])
-        self.assertIsNone(card.id)  # 尚未入库
+        self.assertIsNone(card.id)  # not stored yet
 
 
 if __name__ == "__main__":

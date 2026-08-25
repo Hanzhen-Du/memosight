@@ -1,124 +1,136 @@
-# 导师问题 3 — 记录频率的功耗 / 准确率权衡：Pareto 曲线方法学
+# Method for the power versus missed-capture curve
 
-> **Summary (EN).** Method for the power-versus-missed-capture trade-off curve. Translates
-> "how often should it record" into three tunable knobs (threshold, sampling rate, debounce
-> interval) and sweeps 396 configurations. Opens with an explicit真/假 stratification table:
-> the per-frame miss and false-wake rates are measured on held-out probes, the
-> frame-to-segment model is assumption-bearing, and the absolute power axis is a placeholder
-> pending hardware instrumentation — **curve shape trustworthy, absolute values not**.
+2026-07-28. Framework: `scripts/pareto_framework.py`. Outputs: `outputs/pareto_sweep.csv`
+(396 configurations) and `outputs/pareto_power_vs_miss.png` (an example plot).
 
-**2026-07-28框架：`scripts/pareto_framework.py`**
-产物：`outputs/pareto_sweep.csv`（396 个配置）、`outputs/pareto_power_vs_miss.png`（样例图）
+**Read this table before reading any number below.**
 
-> ## 数据真假分层（读任何数字前先看这里）
-> | | 内容 | 状态 |
-> |---|---|---|
-> | ✅ **真实** | 每帧漏报率 / 误唤醒率随阈值的变化 | 当前守门员在**固定 held-out 探针**上的实测分数（181 + 235 张，int8 部署口径，零泄漏核验） |
-> | 🔶 **模型** | 单帧漏报 → 整段漏报；去抖影响；场景先验 | 结构可辩护，但含**显式假设**，需真实录像标定（H7） |
-> | ⚠️ **占位** | 功耗轴的**绝对值** | **不是实测**，待 Pi + 功耗计（H1/H6）。**曲线形状可信，绝对值不可信。** |
-
----
-
-## 0. 导师问题的翻译
-
-> 「长时间看屏幕，但只想记关键信息 —— 记录频率怎么选？」
-
-"记录频率"是产品语言。要用数据回答，先把它翻译成**可调的旋钮**和**可测的指标**：
-
-**三个旋钮**（都是软件参数，不需要改模型）：
-
-| 旋钮 | 物理含义 | 调高会怎样 |
+| | Content | Status |
 |---|---|---|
-| **触发阈值** `threshold` | 守门员多有把握才算"值得记" | 更保守：误唤醒↓、漏报↑ |
-| **采样率** `fps` | 守门员每秒看几眼（占空比） | 更勤快：漏报↓、常开功耗↑ |
-| **去抖间隔** `debounce` | 两次重处理之间的最小间隔 | 更省：功耗↓、可能漏掉紧接着出现的新屏 |
+| Measured | How per-frame miss rate and false-wake rate vary with threshold | Real scores from the current gatekeeper on fixed held-out probes: 181 + 235 images, int8 deployment measurement, leakage verified as zero |
+| Modelled | Per-frame miss to whole-segment miss, the effect of debounce, the scene prior | The structure is defensible but carries explicit assumptions that need calibrating against real recorded video (H7) |
+| Placeholder | The absolute values on the power axis | Not measured. Waiting on a Pi and a power meter (H1/H6). The shape of the curve is trustworthy; the absolute values are not |
 
-**三个指标**：
+## 0. Translating the question
 
-| 指标 | 定义 | 为什么重要 |
+The advisor's question was: someone spends a long time looking at screens but only wants the
+important things recorded, so how should the recording frequency be chosen?
+
+"Recording frequency" is product language. Answering it with data means turning it into knobs
+that can be adjusted and metrics that can be measured.
+
+Three knobs, all software parameters that need no change to the model:
+
+| Knob | Physical meaning | Effect of increasing it |
 |---|---|---|
-| **漏报率** miss | 该记的屏幕没记下来的比例 | **这是产品的命门**——漏掉 = 永久丢失这段记忆 |
-| **功耗** power | 平均功耗 = 常开守门员 + 触发×重处理 | 决定续航，是"常开可穿戴"的立项前提 |
-| **误唤醒率** false-wake | 不该记的画面触发了昂贵重处理的比例 | 白耗电 + 产生垃圾 memory card |
+| `threshold` | How confident the gatekeeper must be that something is worth recording | More conservative: fewer false wakes, more misses |
+| `fps` | How many times per second the gatekeeper looks (its duty cycle) | More diligent: fewer misses, higher always-on power |
+| `debounce` | Minimum interval between two downstream runs | Cheaper: lower power, but a new screen appearing immediately after one may be missed |
 
-**没有唯一最优解**——这正是要画 Pareto 曲线的原因：给出"哪些配置是不被支配的"，让工作点成为**可解释的选择**而不是拍脑袋的常数。
+Three metrics:
 
----
+| Metric | Definition | Why it matters |
+|---|---|---|
+| miss | Fraction of screens that should have been recorded and were not | The critical one for the product. A miss means that memory is gone for good |
+| power | Average power: always-on gatekeeper plus triggers times downstream cost | Determines battery life, which is the premise of an always-on wearable |
+| false-wake | Fraction of frames that should not be recorded but woke the expensive downstream stage | Wasted energy, plus junk memory cards |
 
-## 1. 三个指标怎么算
+There is no single optimum, which is exactly why a Pareto curve is the right answer: it gives
+the set of configurations that are not dominated, so the operating point becomes an explainable
+choice rather than an arbitrary constant.
 
-### ① 漏报率 —— 两层，第一层是真数据
+## 1. How each metric is computed
 
-**第一层（✅ 真实）：每帧漏报率**
-直接来自当前守门员在 `person_screen` 探针（181 张 GT=记）上的真实分数：
+### Miss rate: two layers, the first of which is real data
 
-```
-miss_frame(thr) = 分数 < thr 的比例 = 1 − recall
-```
+Layer one, measured: per-frame miss rate.
 
-**第二层（🔶 模型）：整段漏报率** —— 一块屏在视野里停留一段时间，守门员会看它很多次。
-
-这里**刻意没用**教科书式的独立试验模型（`miss^k`）。那个模型会给出荒谬结论：
-多看几次漏报就趋近 0。现实不是这样——**有些屏幕是系统性漏的**：
-守门员对它的打分本来就远低于阈值，看一百次还是判错一百次。
-
-改用**逐屏分数**建模（这也是为什么要用探针的**逐张分数**而不是聚合率）：
+Taken directly from the current gatekeeper's real scores on the `person_screen` probe (181
+images, ground truth "record"):
 
 ```
-一块屏 i 的探针分数 s_i = 它的"固有难度"
-不同视角/抖动带来分数扰动 σ
-  单次看漏它的概率     = Φ((thr − s_i) / σ)
-  连看 k_eff 次全漏     = Φ((thr − s_i) / σ) ^ k_eff
-  整段漏报率            = 对所有屏取平均
+miss_frame(thr) = fraction of scores below thr = 1 - recall
 ```
 
-- `k_eff = 1 + (k − 1)(1 − ρ)`，`k = fps × 停留时长`。ρ 是帧间相关系数：
-  连续帧几乎是同一张图，判错高度相关。**ρ=0.9 是保守假设**（宁可高估漏报）。
-- σ→0 时模型自动退化为每帧漏报率，**漏报有地板**（分数远低于阈值的屏永远漏）——这是正确行为，
-  也是这个模型比 `miss^k` 强的地方。
+Layer two, modelled: whole-segment miss rate. A screen stays in view for a while, so the
+gatekeeper looks at it many times.
 
-**假设清单（都要用真实录像标定，H7）**：`σ=0.10`、`ρ=0.9`、屏幕停留 `20s`、场景先验 `p_screen=0.15`。
+The textbook independent-trials model (`miss^k`) is deliberately not used here. It produces an
+absurd conclusion: look a few more times and the miss rate approaches zero. Reality does not
+work that way, because some screens are missed systematically — the gatekeeper scores them far
+below the threshold, and looking a hundred times gets it wrong a hundred times.
 
-### ② 误唤醒率（✅ 真实）
-
-来自 `person_noscreen` 探针（235 张 GT=不记）的真实分数：`false_wake(thr) = 分数 ≥ thr 的比例`。
-这**完全是软件评估**，不需要任何硬件。
-
-### ③ 功耗（⚠️ 占位参数 + 真实结构）
+Instead the model works from per-screen scores, which is why the probe's per-image scores are
+needed rather than an aggregate rate:
 
 ```
-平均功耗 = 板子本底 + fps × 每tick能耗 + 触发率 × 每次重处理能耗
-（单位换算：mJ/s == mW，所以"次/秒 × mJ/次"可以直接当 mW 相加）
-
-触发率 = fps × [ p_screen × recall + (1 − p_screen) × false_wake ]，再被去抖封顶到 1/debounce
+For screen i, probe score s_i is its intrinsic difficulty.
+Viewing angle and shake perturb the score by sigma.
+  probability of missing it once   = Phi((thr - s_i) / sigma)
+  probability of missing it k_eff times = Phi((thr - s_i) / sigma) ^ k_eff
+  whole-segment miss rate          = the mean over all screens
 ```
 
-**触发率这个公式把三个指标缝在了一起**：阈值降低 → recall↑（漏报↓）但 false_wake↑ → 触发率↑ → 功耗↑。
-这就是权衡的数学来源，**不是人为设计的**。
+`k_eff = 1 + (k - 1)(1 - rho)`, where `k = fps * dwell time`. `rho` is the inter-frame
+correlation: consecutive frames are nearly the same image, so errors are highly correlated.
+`rho = 0.9` is the conservative assumption, in the sense of preferring to overestimate misses.
 
-每次重处理的能耗直接引用**任务B** 的两条路径（`--trigger-path X|Y`），保证两个框架口径一致：
-任务B 测出真值后，本框架的功耗轴自动跟着变真。
+As sigma approaches 0 the model degenerates to the per-frame miss rate, which means the miss
+rate has a floor — screens scoring far below the threshold are always missed. That is correct
+behaviour, and it is where this model beats `miss^k`.
 
----
+Assumptions, all of which need calibrating against real recorded video (H7): `sigma = 0.10`,
+`rho = 0.9`, screen dwell time 20 s, scene prior `p_screen = 0.15`.
 
-## 2. 怎么读这张图
+### False-wake rate: measured
+
+From real scores on the `person_noscreen` probe (235 images, ground truth "do not record"):
+`false_wake(thr) = fraction of scores at or above thr`. This is entirely a software evaluation
+and needs no hardware.
+
+### Power: real structure, placeholder parameters
+
+```
+average power = board baseline + fps * energy per tick + trigger rate * energy per downstream run
+(units: mJ/s == mW, so "events per second * mJ per event" adds directly as mW)
+
+trigger rate = fps * [ p_screen * recall + (1 - p_screen) * false_wake ], then capped by debounce at 1/debounce
+```
+
+The trigger-rate formula is what stitches the three metrics together. Lowering the threshold
+raises recall (fewer misses) but also raises false_wake, which raises the trigger rate, which
+raises power. That is where the trade-off comes from mathematically. It was not designed in by
+hand.
+
+The energy of one downstream run is taken directly from the two paths in the power comparison
+(`--trigger-path X|Y`), so the two frameworks stay consistent. Once that measurement is real,
+this framework's power axis becomes real with it.
+
+## 2. Reading the plot
 
 ![Pareto](../outputs/pareto_power_vs_miss.png)
 
-- **每个灰点** = 一个 (阈值, fps, 去抖) 配置（共扫了 11×6×6 = **396** 个）。
-- **彩色点 + 黑线** = **Pareto 前沿**：不存在另一个配置在功耗和漏报上都不差、且至少一项更好。
-  灰点全是**被支配的**——有更好的配置在等着，选它们纯属浪费。
-- **颜色 = 阈值**（红=0.25 爱记 → 蓝=0.75 保守）。
-- **横轴用对数**，因为可控功耗跨了两个数量级（十几 mW ~ 几千 mW）。
-- **横轴是"可控功耗"= 总功耗 − 板子本底**，即这三个旋钮**真正能控制的那部分**（原因见 §4）。
+- Each grey point is one (threshold, fps, debounce) configuration. The sweep covers
+  11 x 6 x 6 = 396 of them.
+- The coloured points joined by the black line are the Pareto frontier: no other configuration
+  is at least as good on both power and miss rate while being better on one. Every grey point
+  is dominated, so choosing one is simply waste.
+- Colour encodes threshold, red at 0.25 (eager to record) through blue at 0.75 (conservative).
+- The x axis is logarithmic because controllable power spans two orders of magnitude, from tens
+  of mW to thousands.
+- The x axis is *controllable* power, meaning total power minus the board baseline — the part
+  these three knobs actually govern. Section 4 explains why.
 
-**怎么用它做决策**：先定一个可接受的漏报上限（产品判断，例如"漏报 ≤ 25%"），
-在图上画一条水平线，取前沿与它的交点——那就是**在该漏报下最省电的配置**。反过来也行：
-先定功耗预算（续航要求），画竖线，取前沿交点 = 该预算下漏报最低的配置。
+To use it for a decision: fix an acceptable miss rate first, which is a product judgement (say
+"no worse than 25%"), draw a horizontal line, and take where it crosses the frontier. That is
+the lowest-power configuration at that miss rate. It works the other way too: fix a power
+budget from the battery-life requirement, draw a vertical line, and the crossing is the
+configuration with the lowest miss rate inside that budget.
 
-样例前沿（⚠️ 功耗为占位值，形状可信、绝对值不可信）：
+Example frontier. The power column is placeholder; the shape is trustworthy, the absolute
+values are not.
 
-| 阈值 | fps | 去抖 | 可控功耗 mW | 整段漏报 | 每帧漏报 | 误唤醒 | 触发/分 |
+| Threshold | fps | Debounce | Controllable power mW | Segment miss | Frame miss | False wake | Triggers/min |
 |---|---|---|---|---|---|---|---|
 | 0.75 | 0.2 | 10s | 23.4 | 80.4% | 81.8% | 5.1% | 0.85 |
 | 0.60 | 0.2 | 10s | 46.4 | 68.3% | 71.3% | 12.3% | 1.78 |
@@ -127,100 +139,116 @@ miss_frame(thr) = 分数 < thr 的比例 = 1 − recall
 | 0.25 | 2 | 10s | 172.6 | 17.4% | 33.1% | 39.6% | 6.00 |
 | 0.25 | 5 | 10s | 208.6 | 11.4% | 33.1% | 39.6% | 6.00 |
 
-**读出三个结构性事实：**
-1. **漏报从 80% 压到 11%，可控功耗涨约 9×**（23→209 mW）。这就是权衡的量级。
-2. **前沿的低漏报段全是低阈值（0.25）+ 高 fps**——即"多看几眼"比"降低判定标准"更划算，
-   因为提高 fps 只花常开功耗，而降阈值会同时抬高误唤醒（39.6%！）→ 触发功耗。
-3. **误唤醒率在前沿上从 5% 一路涨到 40%**——这是**第三个维度**，图上没画。
-   如果产品对垃圾卡片零容忍，前沿右段就不可选，得回头看高阈值段。
+Three structural facts fall out of that:
 
----
+1. Pushing the miss rate from 80% down to 11% costs about 9x the controllable power, 23 to
+   209 mW. That is the magnitude of the trade-off.
+2. The low-miss end of the frontier is entirely low threshold (0.25) plus high fps. Looking more
+   often is better value than lowering the decision standard, because raising fps only costs
+   always-on power while lowering the threshold also raises false wakes (to 39.6%) and therefore
+   trigger power.
+3. False-wake rate climbs from 5% to 40% along the frontier. That is a third dimension and it is
+   not on the plot. If the product has no tolerance for junk cards, the right-hand end of the
+   frontier is unavailable and the high-threshold end is where to look.
 
-## 3. 哪些是真的、哪些等硬件
+## 3. What is real and what waits for hardware
 
-| 部分 | 状态 | 说明 |
+| Part | Status | Note |
 |---|---|---|
-| 漏报/误唤醒**随阈值的变化关系** | ✅ **真实** | 探针实测分数，本轮已算出，不需硬件 |
-| 阈值取舍的**方向和量级** | ✅ **真实** | 例如 @0.25 误唤醒 39.6%、@0.75 漏报 81.8% |
-| 单帧 → 整段的换算 | 🔶 模型 | σ/ρ/停留时长三个假设，需真实录像标定（H7） |
-| 场景先验 `p_screen` | 🔶 假设 | 需真实佩戴录像统计 |
-| 功耗**绝对值** | ⚠️ **占位** | 待 Pi + 功耗计（H1/H6） |
-| 功耗**结构**（本底 + 采样 + 触发） | ✅ 真实 | 能量守恒，与参数无关 |
+| How miss and false-wake vary with threshold | Measured | Real probe scores, computed this round, no hardware needed |
+| The direction and magnitude of the threshold trade-off | Measured | For example 39.6% false wake at 0.25, 81.8% miss at 0.75 |
+| Per-frame to whole-segment conversion | Modelled | Three assumptions (sigma, rho, dwell time) needing calibration against real video (H7) |
+| Scene prior `p_screen` | Assumption | Needs statistics from real worn-camera recordings |
+| Absolute power values | Placeholder | Waiting on a Pi and a power meter (H1/H6) |
+| Power *structure* (baseline + sampling + triggers) | Real | Energy conservation, independent of the parameters |
 
-**换句话说：曲线的形状和取舍结构现在就能给导师看；横轴刻度上的数字要等硬件。**
+In short: the shape of the curve and the structure of the trade-off can be presented now; the
+numbers on the x axis have to wait for hardware.
 
----
+## 4. One finding worth calling out: the baseline swallows the knobs
 
-## 4. 一个值得单独说的发现：本底功耗吞掉了旋钮
+With the placeholder parameters, the board's baseline draw, on the order of 2600 mW, is an
+order of magnitude larger than anything these three knobs control (23 to 209 mW). Total power
+moves from 2623 mW to 2809 mW, a change of only 7%. Adjusting the recording frequency has
+almost no effect on a Pi 5's overall battery life.
 
-用占位参数算下来，**板子本底（~2600 mW 量级）比这三个旋钮能控制的部分（23–209 mW）大一个数量级**。
-即总功耗从 2623 mW 到 2809 mW，**只变化了 7%**——记录频率怎么调，对 Pi 5 的总续航几乎没影响。
+The specific number is a placeholder, but the conclusion is insensitive to it: an idle Pi 5
+draws watts while gatekeeper inference draws milliwatts.
 
-⚠️ 这个具体数字是占位值，但**结论对量级不敏感**：Pi 5 空载是**瓦级**，而守门员推理是**毫瓦级**。
+This is not a flaw in the framework. It is a real signal about the platform.
 
-**这不是框架的缺陷，是一个关于平台的真实信号**：
-- 在 **Pi 5** 上，"常开守门员省电"这个论点**基本无效**——本底就把电吃光了。Pi 是**原型验证平台**，不是产品形态。
-- 级联感知的省电论点，只有在**本底功耗和守门员同量级**的平台上才成立（ESP32 类，毫瓦级）。
-  这正是 `docs/label-scope.md` 里"守门员从一开始就保持可移植性、控制模型大小、支持 int8"的原因。
-- **对导师汇报时应主动说明**：Pareto 曲线在 Pi 上量出来会很平；真正有说服力的功耗曲线要在 ESP32 类硬件上做。
-  Pi 上的测量价值在于**标定每个动作的能耗系数**（每 tick 多少 mJ、每次 OCR 多少 mJ），
-  这些系数可以外推到目标平台。
+- On a Pi 5, the argument that an always-on gatekeeper saves power is essentially void, because
+  the baseline consumes everything. The Pi is a prototyping platform, not the product form
+  factor.
+- The cascade's power argument only holds on a platform whose baseline draw is the same order
+  of magnitude as the gatekeeper, meaning something in the ESP32 class, at milliwatts. That is
+  the reason the gatekeeper has been kept portable, small and int8-capable from the start.
+- This should be stated up front when presenting the result: a Pareto curve measured on a Pi
+  will come out flat, and a convincing power curve has to be produced on ESP32-class hardware.
+  The value of measuring on the Pi is calibrating the energy coefficient of each action — mJ
+  per tick, mJ per OCR run — and those coefficients can be extrapolated to the target platform.
 
----
+## 5. Honest boundaries
 
-## 5. 诚实边界
+1. This uses the single seed 42 model, not the 5-seed mean. That is deliberate: the seed 42 int8
+   file is the deployment artifact that would be flashed onto the Pi, so the Pareto curve should
+   describe that one. But it is worth knowing how it compares to the 5-seed mean:
 
-1. **用的是 seed42 单模型，不是 5-seed 均值。**
-   这是**故意的**——seed42 的 int8 文件就是会烧进 Pi 的那个部署产物，Pareto 曲线应该描述**它**。
-   但要知道它比 5-seed 均值乐观/悲观：
-
-   | | seed42（本曲线） | 5-seed 均值（task1 报告） |
+   | | seed 42 (this curve) | 5-seed mean (task1 report) |
    |---|---|---|
-   | noscreen FP @0.40 | 25.1% | 33.1% ± 9.1% |
-   | screen recall @0.40 | 47.5% | 58.2% ± 9.5% |
+   | noscreen FP at 0.40 | 25.1% | 33.1% ± 9.1% |
+   | screen recall at 0.40 | 47.5% | 58.2% ± 9.5% |
 
-   seed42 整体分数分布偏低：误唤醒比均值**乐观**，召回比均值**悲观**。换 seed 曲线会平移，
-   **形状不变**。汇报时不要把这条曲线说成"模型的平均表现"。
+   Seed 42's score distribution sits low overall, so it is optimistic on false wakes and
+   pessimistic on recall relative to the mean. A different seed shifts the curve without
+   changing its shape. Do not describe this curve as the model's average behaviour.
 
-2. **探针是 Pexels 摆拍照，不是头戴摄像头的真实抓拍帧。** 真实帧更糊、更斜、更暗，
-   数字大概率更差。真实帧重测已列入 H7。
+2. The probes are posed Pexels photographs, not real frames from a head-mounted camera. Real
+   frames are blurrier, more angled and darker, so the numbers will probably be worse.
+   Re-measuring on real frames is H7.
 
-3. **整段漏报模型没有经过任何验证。** σ/ρ/停留时长是拍出来的合理值，不是测出来的。
-   只要有一段真实佩戴录像 + 人工标注"哪些屏该记"，这三个参数都能标定。
+3. The whole-segment miss model has not been validated at all. Sigma, rho and dwell time are
+   plausible values that were chosen, not measured. A single stretch of real worn-camera video
+   with manual "which screens should be recorded" labels would calibrate all three.
 
-4. **去抖模型很粗**：只考虑"去抖窗口比屏幕停留时间长"时的漏报，没建模"同一块屏内容变化
-   （翻页/滚动）应该重复记录"这种情况。真实场景里翻 PPT 是常态，这会低估去抖的代价。
+4. The debounce model is crude. It only accounts for misses when the debounce window is longer
+   than a screen's dwell time, and does not model the case where the content of one screen
+   changes (page turns, scrolling) and should be recorded again. Advancing slides is normal in
+   practice, so this underestimates the cost of debounce.
 
-5. **396 个配置是网格扫描，不是连续优化。** 真实最优点可能落在网格之间；本框架给的是
-   **可选工作点集合**，不是数学最优解。
+5. The 396 configurations are a grid sweep, not continuous optimisation. The true optimum may
+   lie between grid points. What this framework gives is a set of candidate operating points,
+   not a mathematical optimum.
 
----
+## 6. What to do once the Pi is available (H1, H6, H7)
 
-## 6. Pi 就绪后要做的（H1/H6/H7）
+1. Calibrate the energy coefficients (H1/H6). Use the differential method from the power
+   comparison to measure gatekeeper energy per tick, energy per downstream run, and the board
+   baseline. Replace the three placeholder fields in `EnergyModel`; nothing else in this
+   framework changes, and the power axis becomes real.
+2. Calibrate the session model (H7). Record real worn-camera video, label it, and measure
+   average screen dwell time, score perturbation sigma, inter-frame correlation rho and the
+   scene prior `p_screen`. Replace the `SessionModel` defaults.
+3. Validate the curve. Pick three operating points on the frontier and actually run them on the
+   Pi (`hardware/cascade.py --fps N --threshold T`), measure power and miss rate, and check
+   whether they land on the predicted curve. This is the real test of whether the curve can be
+   trusted.
+4. Extrapolate to an ESP32-class platform. Recompute the curve using the calibrated energy
+   coefficients and the ESP32's baseline draw (section 4).
 
-1. **标定能耗系数**（H1/H6）：用任务B 的差值法测每 tick 守门员能耗、每次重处理能耗、板子本底
-   → 替换 `EnergyModel` 的三个占位字段 → **本框架其余代码一行不改**，直接出真实功耗轴。
-2. **标定会话模型**（H7）：录一段真实佩戴视频 + 标注 → 量出屏幕平均停留时长、分数扰动 σ、
-   帧间相关 ρ、场景先验 `p_screen` → 替换 `SessionModel` 默认值。
-3. **验证曲线**：挑前沿上 3 个工作点，在 Pi 上**实跑**（`hardware/cascade.py --fps N --threshold T`），
-   实测功耗与漏报，看是否落在预测曲线上。**这一步才是曲线可信度的真正检验。**
-4. **外推到 ESP32 类平台**：用标定出的能耗系数 + ESP32 的本底功耗重算曲线（见 §4）。
-
----
-
-## 附：可复现命令
+## Appendix: commands
 
 ```bash
-# 扫描 + 出图（当前可跑，功耗为占位值）
+# Sweep and plot. Runnable now; power values are placeholders
 .venv/bin/python scripts/pareto_framework.py
 
-# 重处理走"传图"路径（对应任务B 的路径Y）
+# Downstream cost taken from the upload-image path (path Y in the power comparison)
 .venv/bin/python scripts/pareto_framework.py --trigger-path Y
 
-# 改会话模型假设看敏感度
+# Sensitivity to the session-model assumptions
 .venv/bin/python scripts/pareto_framework.py --rho 0.7 --t-visible 10 --score-jitter 0.15
 
-# 探针分数重打分（换模型时需要）
+# Re-score the probes, needed when the model changes
 PYTHONPATH=scripts .venv/bin/python scripts/probe_fp_test.py \
   --probe-dir data/probe_person_screen \
   --keras-model models/task1_candidates/gatekeeper_task1_C_wide_uniform.keras \
@@ -228,6 +256,7 @@ PYTHONPATH=scripts .venv/bin/python scripts/probe_fp_test.py \
   --out data/processed/probe_person_screen_audit_cwu --no-gradcam
 ```
 
-> **绘图后端说明**：本机 venv **没有 matplotlib**，项目规则禁止未经批准装包，
-> 故 `pareto_framework.py` 实现了双后端——有 matplotlib 就用它，没有则用 PIL 手绘（零新依赖）。
-> 上面那张图是 PIL 后端画的。**批准装 matplotlib 后自动切换，不需要改代码。**
+On plotting: matplotlib is not installed in this environment, so `pareto_framework.py`
+implements two backends — it uses matplotlib when present and falls back to drawing with PIL,
+which adds no dependency. The plot above came from the PIL backend. Installing matplotlib
+switches backends automatically with no code change.

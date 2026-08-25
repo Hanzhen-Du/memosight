@@ -1,15 +1,17 @@
-"""命令行查询/演示 CLI —— 验证"可回忆"闭环。
+"""Command-line recall and demo CLI, which is how the recall loop is verified.
 
-子命令：
-  list                       列出全部 memory card
-  show <id>                  看单条详情
-  search <keyword>           按关键词搜 ocr_text / tags
-  pending                    看 pending 待处理队列
-  ingest <image> [...]       跑一次捕捉（mock 触发→帧→OCR→enrich/入队→存）
-  process-pending            恢复联网后批量补传 pending
-  demo                       内置端到端演示（合成一张文字图跑完整闭环）
+Subcommands:
+  list                       list every memory card
+  show <id>                  show one card in detail
+  search <keyword>           search ocr_text and tags by keyword
+  pending                    show the pending queue
+  ingest <image> [...]       run one capture (mocked trigger, frame, OCR, enrich or queue, store)
+  process-pending            backfill the pending queue once connectivity returns
+  demo                       built-in end-to-end demo, synthesising a text image and running the
+                             whole loop
 
-DB 路径：默认 data/mvp_demo/memosight.db，可用环境变量 MEMOSIGHT_DB 覆盖。
+Database path: data/mvp_demo/memosight.db by default, overridable with the MEMOSIGHT_DB
+environment variable.
 """
 
 from __future__ import annotations
@@ -35,7 +37,8 @@ ENRICHER_CHOICES = ("deepseek", "claude", "mock")
 
 
 def _make_enricher(args):
-    """默认 DeepSeekEnricher；--enricher 选择 deepseek/claude/mock；--mock-enrich 是 mock 的简写。"""
+    """Defaults to DeepSeekEnricher. --enricher selects deepseek, claude or mock, and
+    --mock-enrich is shorthand for mock."""
     if getattr(args, "mock_enrich", False):
         return MockCloudEnricher()
     choice = getattr(args, "enricher", "deepseek")
@@ -78,18 +81,18 @@ def cmd_list(args, cfg):
     with _store(cfg) as store:
         cards = store.list_all(limit=args.limit)
         if not cards:
-            print("(空) 还没有 memory card。用 `ingest` 或 `demo` 造一张。")
+            print("(empty) no memory cards yet. Create one with `ingest` or `demo`.")
             return
         for c in cards:
             print(_fmt_card_line(c))
-        print(f"\n共 {len(cards)} 张（done={store.count('done')} pending={store.count('pending')}）")
+        print(f"\n{len(cards)} cards (done={store.count('done')} pending={store.count('pending')})")
 
 
 def cmd_show(args, cfg):
     with _store(cfg) as store:
         c = store.get(args.id)
         if not c:
-            print(f"未找到 #{args.id}")
+            print(f"#{args.id} not found")
             sys.exit(1)
         _print_card_detail(c)
 
@@ -98,22 +101,22 @@ def cmd_search(args, cfg):
     with _store(cfg) as store:
         cards = store.search(args.keyword, limit=args.limit)
         if not cards:
-            print(f"没有匹配 '{args.keyword}' 的卡片。")
+            print(f"no cards match '{args.keyword}'.")
             return
         for c in cards:
             print(_fmt_card_line(c))
-        print(f"\n匹配 {len(cards)} 张。")
+        print(f"\n{len(cards)} matches.")
 
 
 def cmd_pending(args, cfg):
     with _store(cfg) as store:
         cards = store.list_pending()
         if not cards:
-            print("pending 队列为空。")
+            print("the pending queue is empty.")
             return
         for c in cards:
             print(_fmt_card_line(c))
-        print(f"\npending 共 {len(cards)} 张。")
+        print(f"\n{len(cards)} cards pending.")
 
 
 def cmd_ingest(args, cfg):
@@ -126,13 +129,13 @@ def cmd_ingest(args, cfg):
             raw_image_policy=args.policy,
         )
         if card is None:
-            print("守门员未触发（confidence 低于阈值），未记录。")
+            print("the gatekeeper did not fire (confidence below the threshold); nothing recorded.")
             return
-        state = "断网入队(pending)" if args.offline else "联网直存(done)"
-        print(f"已捕捉 → {state}  (OCR={pipe.ocr.name}, enricher={pipe.ingest.transport.enricher.name})")
+        state = "offline, queued as pending" if args.offline else "online, stored as done"
+        print(f"captured: {state}  (OCR={pipe.ocr.name}, enricher={pipe.ingest.transport.enricher.name})")
         _print_card_detail(card)
     except EnricherConfigError as e:
-        print(f"[enricher 配置错误] {e}\n提示：用 --mock-enrich 可离线跑（返回 mock 假标签）。")
+        print(f"[enricher configuration error] {e}\nHint: --mock-enrich runs offline and returns mock tags.")
         sys.exit(2)
     finally:
         pipe.close()
@@ -144,18 +147,19 @@ def cmd_process_pending(args, cfg):
     )
     try:
         done = pipe.process_pending()
-        print(f"补传完成 {len(done)} 张。")
+        print(f"backfilled {len(done)} cards.")
         for c in done:
             print(_fmt_card_line(c))
     except EnricherConfigError as e:
-        print(f"[enricher 配置错误] {e}\n提示：用 --mock-enrich 可离线跑。")
+        print(f"[enricher configuration error] {e}\nHint: --mock-enrich runs offline.")
         sys.exit(2)
     finally:
         pipe.close()
 
 
 def cmd_demo(args, cfg):
-    """合成一张文字图，跑完整闭环，再搜出来，证明可回忆。"""
+    """Synthesise a text image, run the whole loop, then search the result back out to show
+    recall works."""
     import cv2
     import numpy as np
 
@@ -170,69 +174,69 @@ def cmd_demo(args, cfg):
                           enricher=_make_enricher(args))
     try:
         enr = pipe.ingest.transport.enricher.name
-        print(f"[1] mock 触发 → 抓帧 {demo_img.name} → OCR({pipe.ocr.name}) → enrich({enr}) → 存库")
+        print(f"[1] mocked trigger -> grab {demo_img.name} -> OCR({pipe.ocr.name}) -> enrich({enr}) -> store")
         card = pipe.capture(demo_img, trigger_confidence=0.93)
         _print_card_detail(card)
         kw = "MEMOSIGHT" if pipe.ocr.name == "tesseract" else "stub"
-        print(f"\n[2] 按关键词 '{kw}' 搜索：")
+        print(f"\n[2] searching for '{kw}':")
         for c in pipe.store.search(kw):
             print("   " + _fmt_card_line(c))
     except EnricherConfigError as e:
-        print(f"[enricher 配置错误] {e}\n提示：用 `demo --mock-enrich` 可离线跑。")
+        print(f"[enricher configuration error] {e}\nHint: `demo --mock-enrich` runs offline.")
         sys.exit(2)
     finally:
         pipe.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="memosight", description="MemoSight MVP 查询/演示 CLI")
+    p = argparse.ArgumentParser(prog="memosight", description="MemoSight MVP recall and demo CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pl = sub.add_parser("list", help="列出全部卡片")
+    pl = sub.add_parser("list", help="list every card")
     pl.add_argument("--limit", type=int, default=None)
     pl.set_defaults(func=cmd_list)
 
-    ps = sub.add_parser("show", help="看单条详情")
+    ps = sub.add_parser("show", help="show one card in detail")
     ps.add_argument("id", type=int)
     ps.set_defaults(func=cmd_show)
 
-    pf = sub.add_parser("search", help="按关键词搜 ocr_text/tags")
+    pf = sub.add_parser("search", help="search ocr_text and tags by keyword")
     pf.add_argument("keyword")
     pf.add_argument("--limit", type=int, default=None)
     pf.set_defaults(func=cmd_search)
 
-    pp = sub.add_parser("pending", help="看 pending 队列")
+    pp = sub.add_parser("pending", help="show the pending queue")
     pp.set_defaults(func=cmd_pending)
 
-    pi = sub.add_parser("ingest", help="跑一次捕捉（mock 触发→帧→OCR→enrich→存）")
-    pi.add_argument("image", help="测试图片路径（替代高清抓帧）")
+    pi = sub.add_parser("ingest", help="run one capture: mocked trigger, frame, OCR, enrich, store")
+    pi.add_argument("image", help="path to a test image, standing in for a full-resolution grab")
     pi.add_argument("--confidence", type=float, default=0.9)
-    pi.add_argument("--offline", action="store_true", help="模拟断网 → 入 pending 队列")
+    pi.add_argument("--offline", action="store_true", help="simulate being offline, so the card is queued as pending")
     pi.add_argument("--policy", default=None,
                     choices=list(config_mod.VALID_RAW_IMAGE_POLICIES),
-                    help="raw_image_policy（默认取配置 delete）")
+                    help="raw_image_policy (defaults to the configured value, delete)")
     pi.add_argument("--enricher", choices=ENRICHER_CHOICES, default="deepseek",
-                    help="选 enricher（默认 deepseek）")
+                    help="which enricher to use (default deepseek)")
     pi.add_argument("--mock-enrich", action="store_true",
-                    help="= --enricher mock（离线/省 token，返回 mock 假标签）")
+                    help="same as --enricher mock: offline, no tokens spent, returns mock tags")
     pi.set_defaults(func=cmd_ingest)
 
-    pr = sub.add_parser("process-pending", help="恢复联网后批量补传 pending")
+    pr = sub.add_parser("process-pending", help="backfill the pending queue once connectivity returns")
     pr.add_argument("--enricher", choices=ENRICHER_CHOICES, default="deepseek",
-                    help="选 enricher（默认 deepseek）")
+                    help="which enricher to use (default deepseek)")
     pr.add_argument("--mock-enrich", action="store_true", help="= --enricher mock")
     pr.set_defaults(func=cmd_process_pending)
 
-    pd = sub.add_parser("demo", help="内置端到端演示")
+    pd = sub.add_parser("demo", help="built-in end-to-end demo")
     pd.add_argument("--enricher", choices=ENRICHER_CHOICES, default="deepseek",
-                    help="选 enricher（默认 deepseek）")
-    pd.add_argument("--mock-enrich", action="store_true", help="= --enricher mock（离线）")
+                    help="which enricher to use (default deepseek)")
+    pd.add_argument("--mock-enrich", action="store_true", help="same as --enricher mock: offline")
     pd.set_defaults(func=cmd_demo)
     return p
 
 
 def main(argv=None) -> None:
-    load_env()  # 从项目根 .env 加载密钥（阶段二真 Claude API 用；本阶段 mock 无害）
+    load_env()  # load keys from the project-root .env; harmless when the enricher is mocked
     args = build_parser().parse_args(argv)
     cfg = config_mod.default_config()
     args.func(args, cfg)

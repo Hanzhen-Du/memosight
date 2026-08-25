@@ -1,9 +1,9 @@
 {
-  "_comment": "Task2 训练负例补充：真实、杂乱、实景里的【人】，NO 屏幕/白板/文档/PPT 文字。修复 person 协变量偏移（探针 FP ~51%）。",
-  "_label": "category=negative_clean → prepare_dataset 映射为 label 0（不记）。新 slug 作为 negative_clean 下的新子类，自动入训练池。",
-  "_design": "刻意区别于现有 people_portrait（干净影棚像）；并刻意偏向【非办公/会议】的日常实景（街头/市场/通勤/家居/运动/服务业/户外活动），原因有三：(1) 最大化场景/光照/构图多样性（这是协变量偏移的解，不是单纯增量）；(2) 办公/会议/教室场景极易混入可读屏幕/白板→污染『无屏』负类；(3) 探针集偏办公/会议，训练负例若镜像探针场景会让探针不再是公平的 held-out 泛化测试——我们要测的是『人≠记』能否泛化到探针场景。",
-  "_distinct_from_probe": "query 措辞刻意不同于 probe_person_noscreen 的子类；图像级零重叠由 download 的全局 Pexels-ID 去重 + 下载后 scripts/guard_probe_overlap.py（ID+感知双查）保证。场景类型可与探针有重叠（街头/咖啡等是部署分布本身），但【图像/近重复】零重叠才是泄漏判据。",
-  "_manual_qc": "下载后必须人眼剔除任何含【可读屏幕/白板/文档/PPT/代码屏文字】的图（否则把正例混进负类）。剔除走 guard 脚本的 quarantine（移动不删除），可追溯。",
+  "_comment": "Task 2 additional training negatives: real, cluttered, in-the-wild people, with no screen, whiteboard, document or slide text. Fixes the person covariate shift, where probe FP was about 51%.",
+  "_label": "category=negative_clean, which prepare_dataset maps to label 0 (do not record). Each new slug becomes a subclass under negative_clean and enters the training pool automatically.",
+  "_design": "Deliberately different from the existing people_portrait, which is clean studio portraiture, and deliberately weighted toward non-office, non-meeting everyday scenes (street, market, commute, home, sport, service work, outdoor activity). Three reasons: maximise diversity of scene, lighting and composition; keep the probe a genuine held-out generalisation test rather than a mirror of the training negatives; and reduce the chance of pulling in images that contain a readable screen.",
+  "_distinct_from_probe": "The query wording is deliberately different from the subclasses of probe_person_noscreen. Zero overlap at the image level is guaranteed by the downloader's global Pexels-ID dedup plus scripts/guard_probe_overlap.py afterwards, which checks by ID and by perceptual hash. Scene types may still overlap with the probe.",
+  "_manual_qc": "After downloading, manually remove any image containing readable screen, whiteboard, document, slide or code-screen text, otherwise positives end up in the negative class. Removal goes through the guard script's quarantine, which moves rather than deletes, so it stays traceable.",
   "_usage": "python3 scripts/download_images.py --config scripts/keywords_task2_neg_people.json --output-root data/raw",
   "negative_clean": [
     {"query": "street photography pedestrians candid", "count": 35},

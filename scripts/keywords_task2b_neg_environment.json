@@ -1,10 +1,10 @@
 {
-  "_comment": "Task2b 针对性负例：诊断驱动。C_wide_uniform 在 noscreen 探针的 FP 集中在【室内办公/会议/居家环境 + 无文字屏状表面】，由亮度+类屏矩形驱动，人脸反相关。补这类环境/空白屏状表面，而非再撒人像。",
-  "_label": "category=negative_clean → prepare_dataset 映射为 label 0（不记）。新 slug 作为 negative_clean 新子类。本阶段【不】跑 prepare_dataset，不并入训练池。",
-  "_design": "刻意偏 empty/blank/off/textless + daylight/bright/window：(1) 攻误触发线索(亮室内+类屏矩形)而非场景标签；(2) 压低混入可读文字屏(=正类)的污染概率；(3) 对准 FP 图偏亮(+0.186)。",
-  "_distinct_from_task2": "区别于 keywords_task2_neg_people.json 的 14 类人像（task2 刻意避开办公/会议）；本轮正是补 task2 留空、而模型正在错的室内建成环境。slug 不与现有 28 个负例子类重名。",
-  "_methodology_tension": "这些场景与 noscreen 探针(office/meeting/living-room)同类型——纳入训练会让探针在该场景从泛化测试退化为同分布测试。属阶段二方法论取舍，待定。",
-  "_manual_qc": "纳入训练前必须人眼剔除任何含【可读屏幕/白板/文档/PPT/代码屏文字】的图。剔除走 guard 脚本 quarantine（移动不删），可追溯。",
+  "_comment": "Task 2b targeted negatives, driven by the diagnosis. C_wide_uniform's false positives on the noscreen probe concentrate in indoor office, meeting and home environments with textless screen-like surfaces, driven by brightness and screen-like rectangles, and inversely correlated with faces. These add that class of environment and blank screen-like surface.",
+  "_label": "category=negative_clean, which prepare_dataset maps to label 0 (do not record). Each new slug becomes a subclass under negative_clean. This phase does not run prepare_dataset and does not merge them into the training pool.",
+  "_design": "Deliberately weighted toward empty, blank, off and textless, plus daylight, bright and window, for three reasons: attack the false-trigger cue (bright indoors plus a screen-like rectangle) rather than the scene label; keep the chance of pulling in a readable text screen, which would be a positive, low; and match the finding that false positives are brighter by +0.186.",
+  "_distinct_from_task2": "Different from the 14 people categories in keywords_task2_neg_people.json, which deliberately avoided office and meeting scenes. This round covers exactly the indoor built environment task 2 left out and the model is getting wrong. The slugs do not collide with the 28 existing negative subclasses.",
+  "_methodology_tension": "These scenes are the same type as the noscreen probe (office, meeting room, living room), so putting them into training demotes the probe on those scenes from a generalisation test to an in-distribution one. That is a phase-two methodological trade-off and is still to be decided.",
+  "_manual_qc": "Before they enter training, manually remove any image containing readable screen, whiteboard, document, slide or code-screen text. Removal goes through the guard script's quarantine, which moves rather than deletes, so it stays traceable.",
   "_usage": "python3 scripts/download_images.py --config scripts/keywords_task2b_neg_environment.json --output-root data/raw",
   "negative_clean": [
     {"query": "blank whiteboard office wall", "count": 30},

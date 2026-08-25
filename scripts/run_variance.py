@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""方差校核 —— 5 个 seed 重切分 + 重训，报告 accuracy / F1 的均值±标准差。
+"""Variance check: re-split and retrain across 5 seeds, reporting mean and standard deviation
+of accuracy and F1.
 
-回答"0.80 是稳定值还是单次幸运"。在**去重后**的清单上做（先消除泄漏，否则方差
-也是被污染的）。每个 seed：去重清单分层重切分 → 用冻结的最佳配置重训 → test 评估。
+This answers whether 0.80 is a stable value or one lucky run. It works on the deduplicated
+manifest, because leakage has to be eliminated first or the variance measurement is itself
+contaminated. For each seed: stratified re-split of the deduplicated manifest, retrain with the
+frozen best configuration, evaluate on test.
 
-固定最佳配置（第一版修复后的组合）：
+The frozen best configuration, from the first round of fixes:
   bn_momentum=0.9, patience=15, start_from_epoch=20, epochs=80,
-  augment=True, class_weight=balanced, lr=1e-3, monitor=val_loss(restore best)。
+  augment=True, class_weight=balanced, lr=1e-3, monitor=val_loss (restore best).
 
-依赖：tensorflow、numpy、pandas（无新增依赖）。复用 model/train/dedup_resplit 模块。
+Dependencies: tensorflow, numpy, pandas. Nothing new. Reuses the model, train and
+dedup_resplit modules.
 
-示例：
+Examples:
   .venv/bin/python scripts/run_variance.py --seeds 42 1 7 123 2024
 """
 
@@ -69,7 +73,7 @@ def run_one(seed: int, manifest: Path, data_root: Path, out_dir: Path) -> dict:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="5-seed 方差校核（去重后）。")
+    p = argparse.ArgumentParser(description="5-seed variance check on the deduplicated manifest.")
     p.add_argument("--manifest", type=Path, default=Path("data/processed/manifest_dedup.csv"))
     p.add_argument("--data-root", type=Path, default=Path("data/processed"))
     p.add_argument("--out-dir", type=Path, default=Path("data/processed"))
@@ -77,7 +81,7 @@ def main() -> int:
     p.add_argument("--json-out", type=Path, default=Path("docs/results/variance_results.json"))
     args = p.parse_args()
 
-    print(f"方差校核：{len(args.seeds)} 个 seed，去重清单 {args.manifest}（test 为裁定）")
+    print(f"variance check: {len(args.seeds)} seeds over {args.manifest}; test is the deciding split")
     results = [run_one(s, args.manifest, args.data_root, args.out_dir) for s in args.seeds]
 
     def stat(key):
@@ -85,7 +89,7 @@ def main() -> int:
         return float(vals.mean()), float(vals.std())
 
     summary = {}
-    print("\n===== 汇总（test split，正类=1）=====")
+    print("\n===== summary (test split, positive class = 1) =====")
     for key in ("accuracy", "f1", "recall", "precision", "fn_rate", "fp_rate"):
         mu, sd = stat(key)
         summary[key] = {"mean": round(mu, 4), "std": round(sd, 4)}
@@ -94,7 +98,7 @@ def main() -> int:
     out = {"seeds": args.seeds, "config": BEST, "per_seed": results, "summary": summary}
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(out, ensure_ascii=False, indent=2))
-    print(f"\n结果已写出：{args.json_out}")
+    print(f"\nresults written to {args.json_out}")
     print("RESULT " + json.dumps(summary, ensure_ascii=False))
     return 0
 

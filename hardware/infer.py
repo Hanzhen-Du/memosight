@@ -1,20 +1,25 @@
-"""守门员边缘推理 —— 共享模块（importable，不是脚本）。
+"""Gatekeeper edge inference. A shared, importable module rather than a script.
 
-封装 int8 .tflite 守门员：load → preprocess(相机帧) → predict(label, score, latency)。
-benchmark_latency.py / cascade.py 都复用本模块，保证"预处理 + 推理"口径唯一。
+Wraps the int8 .tflite gatekeeper: load, preprocess a camera frame, predict (label, score,
+latency). Both benchmark_latency.py and cascade.py use this module, so preprocessing and
+inference have exactly one definition.
 
-设计选择（写进注释，便于审计）：
-- 运行时优先用 LiteRT(`ai_edge_litert.Interpreter`)——这是树莓派上的官方推荐运行时
-  （TF 2.20 起 `tf.lite.Interpreter` 计划弃用）。若 Pi 上没装 ai_edge_litert，
-  回退到 `tensorflow.lite.Interpreter`，这样本模块在笔记本上也能跑通自测。
-- 预处理与训练/导出**口径一致**：单通道灰度 → resize 96×96 用 INTER_AREA（缩小专用，
-  抗锯齿最好）→ 像素归一化到 [0,1] float（对应 train.py 的 convert_image_dtype）→
-  再按模型**自身**的输入量化参数(scale, zero_point)量化成 int8。量化参数从 interpreter
-  读，**绝不硬编码**——这样喂进 int8 图的数值与转换器标定时完全一致。
-- 阈值不写死在 predict 里：predict 返回 argmax label + p(记) 概率分数，
-  由调用方(cascade.py)用可配置阈值裁定"记/不记"，便于将来调 FN/FP 工作点。
+Design choices, written down so the setup can be audited:
+- The runtime is LiteRT (`ai_edge_litert.Interpreter`) when available, which is the recommended
+  runtime on Raspberry Pi (`tf.lite.Interpreter` is slated for deprecation from TF 2.20). If
+  ai_edge_litert is not installed on the Pi, it falls back to `tensorflow.lite.Interpreter`,
+  which also lets this module be tested on a laptop.
+- Preprocessing matches training and export exactly: single-channel greyscale, resize to 96x96
+  with INTER_AREA (built for downscaling, best anti-aliasing), normalise pixels to [0,1] float
+  (matching train.py's convert_image_dtype), then quantise to int8 using the model's own input
+  quantisation parameters (scale, zero_point). Those parameters are read from the interpreter
+  and never hardcoded, so the values fed to the int8 graph match what the converter calibrated
+  against.
+- The threshold is not baked into predict. predict returns the argmax label plus the p(record)
+  score, leaving the caller (cascade.py) to apply a configurable threshold, which keeps the
+  FN/FP operating point adjustable.
 
-依赖（Pi 端）：ai_edge_litert（或 tensorflow）、opencv-headless(cv2)、numpy。
+Dependencies on the Pi: ai_edge_litert (or tensorflow), opencv-headless (cv2), numpy.
 """
 
 from __future__ import annotations
@@ -25,40 +30,48 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# 守门员输入边长（与训练/导出一致：96×96×1 灰度）。
+# Gatekeeper input side length, matching training and export: 96x96x1 greyscale.
 INPUT_SIZE = 96
 
-# 默认决策阈值：对 p(记)=softmax[1] 卡阈值。0.5 等价 argmax。
-# v4_mvp 调过的部署工作点约 0.55（见 models/README）；阈值是 FN/FP 工作点旋钮，
-# 留给调用方覆盖，这里只给一个安全默认。
+# Default decision threshold, applied to p(record) = softmax[1]. 0.5 is equivalent to argmax.
+# The deployment operating point tuned for v4_mvp is about 0.55 (see models/README). The
+# threshold is the FN/FP knob and is meant to be overridden by the caller; this is only a safe
+# default.
 DEFAULT_THRESHOLD = 0.5
 
 
 def _make_interpreter(model_path: str):
-    """优先 LiteRT，回退 tf.lite。返回未 allocate 的 interpreter。"""
+    """Prefer LiteRT, fall back to tf.lite. Returns an interpreter that has not been
+    allocated yet."""
     try:
-        from ai_edge_litert.interpreter import Interpreter  # Pi 上的推荐运行时
+        from ai_edge_litert.interpreter import Interpreter  # recommended runtime on the Pi
         return Interpreter(model_path=model_path)
     except ImportError:
-        # 笔记本自测 / 尚未装 ai_edge_litert 时回退。功能等价。
-        import tensorflow as tf  # noqa: 局部导入，避免 Pi 上强依赖整个 TF
+        # Fallback for laptop testing, or when ai_edge_litert is not installed. Functionally
+        # equivalent.
+        import tensorflow as tf  # noqa: local import, so the Pi does not hard-depend on all of TF
         return tf.lite.Interpreter(model_path=model_path)
 
 
 def load_model(path: str | Path):
-    """加载 int8 .tflite，allocate_tensors，返回可直接推理的 interpreter。"""
+    """Load an int8 .tflite, allocate tensors, and return an interpreter ready for
+    inference."""
     interp = _make_interpreter(str(path))
     interp.allocate_tensors()
     return interp
 
 
 def _to_gray(frame: np.ndarray) -> np.ndarray:
-    """把相机帧统一成 2D 灰度 uint8。
+    """Normalise a camera frame to 2D greyscale uint8.
 
-    接受：2D 灰度（如 Picamera2 lores 的 YUV420 Y 平面，最省）、或 3D 彩色。
-    注：Picamera2 默认给 RGB；用 COLOR_RGB2GRAY 走标准 luma(0.299R+0.587G+0.114B)，
-    与 PNG 解码到单通道的 luma 近似一致。若上游其实是 BGR，仅 R/B 权重对调，
-    对低分辨率灰度守门员影响可忽略——但最优做法是上游直接给灰度（见 cascade.py）。
+    Accepts 2D greyscale, such as the Y plane of Picamera2's YUV420 lores stream, which is the
+    cheapest option, or 3D colour.
+
+    Note that Picamera2 gives RGB by default, so COLOR_RGB2GRAY applies the standard luma
+    (0.299R + 0.587G + 0.114B), which closely matches the luma from decoding a PNG to a single
+    channel. If the source were actually BGR, only the R and B weights swap, which is
+    negligible for a low-resolution greyscale gatekeeper. The best option is still for the
+    caller to supply greyscale directly (see cascade.py).
     """
     if frame.ndim == 2:
         return frame
@@ -66,38 +79,41 @@ def _to_gray(frame: np.ndarray) -> np.ndarray:
         return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     if frame.ndim == 3 and frame.shape[2] == 1:
         return frame[:, :, 0]
-    raise ValueError(f"无法识别的帧形状：{frame.shape}")
+    raise ValueError(f"unrecognised frame shape: {frame.shape}")
 
 
 def preprocess(frame: np.ndarray, interpreter) -> np.ndarray:
-    """相机帧 → (1,96,96,1) int8，口径同训练/导出。
+    """Camera frame to (1,96,96,1) int8, matching training and export.
 
-    需要 interpreter 以读取输入张量的量化参数（scale, zero_point），不硬编码。
+    The interpreter is needed to read the input tensor's quantisation parameters (scale,
+    zero_point) rather than hardcoding them.
     """
     gray = _to_gray(frame)
-    # INTER_AREA：缩小图像的推荐插值，等价区域平均，抗锯齿；与"低分辨率灰度输入"目标一致。
+    # INTER_AREA is the recommended interpolation for shrinking; it is equivalent to area
+    # averaging and anti-aliases well, which suits a low-resolution greyscale input.
     resized = cv2.resize(gray, (INPUT_SIZE, INPUT_SIZE), interpolation=cv2.INTER_AREA)
-    x = resized.astype(np.float32) / 255.0  # → [0,1]，对应训练 convert_image_dtype
+    x = resized.astype(np.float32) / 255.0  # to [0,1], matching convert_image_dtype in training
 
     in_detail = interpreter.get_input_details()[0]
-    scale, zero_point = in_detail["quantization"]  # 模型自带的输入量化参数
-    if scale == 0:  # 理论上 int8 模型不会是 0；保险：float 输入模型直接喂 float
+    scale, zero_point = in_detail["quantization"]  # the model's own input quantisation parameters
+    if scale == 0:  # an int8 model should never be 0; as a safeguard, feed float models float
         q = x
     else:
-        # q = round(real/scale) + zero_point，钳到 int8 范围
+        # q = round(real / scale) + zero_point, clamped to the int8 range
         q = np.round(x / scale + zero_point)
         q = np.clip(q, -128, 127).astype(np.int8)
     return q.reshape(1, INPUT_SIZE, INPUT_SIZE, 1)
 
 
 def predict(interpreter, frame: np.ndarray) -> tuple[int, float, float]:
-    """对一帧做守门员推理。
+    """Run the gatekeeper on one frame.
 
-    返回 (label, score, latency_ms)：
-      label      —— argmax 类别（0=不记 / 1=记）
-      score      —— p(记)=softmax[1]，dequant 后的概率，供调用方卡阈值
-      latency_ms —— **纯推理**耗时（set_tensor+invoke+get_tensor），不含预处理；
-                    这样 cascade 的 hits log 与 benchmark 口径一致、可比。
+    Returns (label, score, latency_ms):
+      label      argmax class, 0 for do-not-record and 1 for record
+      score      p(record) = softmax[1], dequantised, for the caller to threshold
+      latency_ms pure inference time (set_tensor, invoke, get_tensor), excluding
+                 preprocessing, so cascade's hit log and the benchmark are directly
+                 comparable.
     """
     x = preprocess(frame, interpreter)
     in_detail = interpreter.get_input_details()[0]
@@ -112,5 +128,5 @@ def predict(interpreter, frame: np.ndarray) -> tuple[int, float, float]:
     o_scale, o_zp = out_detail["quantization"]
     probs = (y.astype(np.float32) - o_zp) * o_scale if o_scale else y.astype(np.float32)
     label = int(np.argmax(probs))
-    score = float(probs[1])  # p(记)
+    score = float(probs[1])  # p(record)
     return label, score, latency_ms

@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
-"""去重 + 分层重切分 —— 修复 check_leakage.py 查出的跨 split 泄漏。
+"""Deduplicate and re-split, fixing the cross-split leakage found by check_leakage.py.
 
-泄漏根因：同一张 Pexels 原图被多个关键词重复下载，落入不同 positive 子类目录，
-分层切分（按大类 positive 整体切）把同图副本散到 train/val/test → 评估虚高。
+Root cause of the leakage: the same Pexels original was downloaded under several keywords and
+landed in different positive subclass folders. The stratified split, which splits the positive
+class as a whole, then scattered copies of one image across train, val and test, inflating the
+evaluation.
 
-本脚本两步：
-  1. build：对全量 manifest 的处理后图算 pHash + 像素相关，按"pHash 汉明 ≤ th
-     且像素相关 ≥ corr"构连通分量，每组留一张代表（字典序最小路径，确定性），
-     写出去重后清单 manifest_dedup.csv。
-  2. split：读去重清单，按 --seed 做与 prepare_dataset.py 一致的"按来源大类分层"
-     70/15/15 切分，写 <prefix>train.csv / val.csv / test.csv。
+Two steps:
+  1. build: over the full manifest, compute pHash and pixel correlation on the processed
+     images, build connected components from pairs where the pHash Hamming distance is within
+     the threshold AND pixel correlation is at or above corr, keep one representative per group
+     (the lexicographically smallest path, so it is deterministic), and write the deduplicated
+     manifest to manifest_dedup.csv.
+  2. split: read the deduplicated manifest and produce a 70/15/15 split stratified by source
+     class with --seed, matching prepare_dataset.py, writing
+     <prefix>train.csv, val.csv and test.csv.
 
-去重后单图只出现一次，从根上消除跨 split 泄漏；切分逻辑与原版一致，仅样本去重。
+After dedup each image appears exactly once, which eliminates cross-split leakage at the root.
+The split logic is unchanged; only the sample set is deduplicated.
 
-依赖：numpy、pandas、opencv-python（无新增依赖）。只读图 + 写 CSV，不动原图。
+Dependencies: numpy, pandas, opencv-python. Nothing new. It reads images and writes CSVs; the
+original images are untouched.
 
-示例：
+Examples:
   .venv/bin/python scripts/dedup_resplit.py build
   .venv/bin/python scripts/dedup_resplit.py split --seed 42 --prefix dedup_
 """
@@ -32,7 +39,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
-# 复用泄漏检查里的哈希实现，保证去重判据与泄漏报告完全一致。
+# Reuse the hash implementation from the leakage check, so the dedup criteria and the leakage
+# report agree exactly.
 from check_leakage import phash64, popcount64  # noqa: E402
 
 SPLIT_RATIOS = {"train": 0.70, "val": 0.15, "test": 0.15}
@@ -58,19 +66,21 @@ def build_dedup_manifest(data_root: Path, manifest: Path, out: Path,
                          out_excluded: Path | None = None) -> None:
     df = pd.read_csv(manifest)
 
-    # 边界收窄：剔除"有文字但非 MVP 首发触发场景"的歧义子类（手机app/TV菜单/商品包装）。
-    # 不删图，只从清单剔除；被剔除行另存归档清单，保留可追溯。
+    # Boundary narrowing: drop the ambiguous subclasses that have text but are not MVP launch
+    # trigger scenes (phone apps, TV menus, product packaging).
+    # The images are not deleted, only removed from the manifest; the removed rows are archived
+    # to a separate manifest so the change stays traceable.
     if exclude_subclasses:
         mask = df["subclass"].isin(exclude_subclasses)
         excluded = df[mask].copy()
         df = df[~mask].copy()
-        print(f"边界收窄：剔除子类 {exclude_subclasses}")
-        print(f"  剔除 {len(excluded)} 张（按子类）：")
+        print(f"boundary narrowing: excluding subclasses {exclude_subclasses}")
+        print(f"  removed {len(excluded)} images, by subclass:")
         print(excluded["subclass"].value_counts().to_string())
         if out_excluded is not None:
             out_excluded.parent.mkdir(parents=True, exist_ok=True)
             excluded.to_csv(out_excluded, index=False)
-            print(f"  归档清单（不删图，仅出训练/评估）：{out_excluded}")
+            print(f"  archive manifest (images kept, only excluded from training and evaluation): {out_excluded}")
 
     n = len(df)
     paths = df["path"].to_numpy()
@@ -79,7 +89,7 @@ def build_dedup_manifest(data_root: Path, manifest: Path, out: Path,
     for i, rel in enumerate(paths):
         g = cv2.imread(str(data_root / rel), cv2.IMREAD_GRAYSCALE)
         if g is None:
-            print(f"[警告] 读不到：{rel}", file=sys.stderr)
+            print(f"[warning] cannot read: {rel}", file=sys.stderr)
             continue
         if g.shape != (96, 96):
             g = cv2.resize(g, (96, 96), interpolation=cv2.INTER_AREA)
@@ -104,24 +114,26 @@ def build_dedup_manifest(data_root: Path, manifest: Path, out: Path,
     groups: dict[str, list[str]] = defaultdict(list)
     for p in paths:
         groups[find(parent, p)].append(p)
-    # 每组代表 = 字典序最小路径（确定性，可复现）。
+    # The representative of each group is the lexicographically smallest path, which is
+    # deterministic and reproducible.
     keep = {min(members) for members in groups.values()}
     dedup_df = df[df["path"].isin(keep)].copy()
 
     multi = [m for m in groups.values() if len(m) > 1]
     removed = n - len(keep)
-    print(f"全量 {n} 张 → 确认近重复对 {n_pairs}，重复组 {len(multi)}，"
-          f"移除 {removed} 张 → 去重后 {len(keep)} 张")
-    print("去重后标签分布：")
+    print(f"{n} images total: {n_pairs} confirmed near-duplicate pairs across {len(multi)} "
+          f"groups, {removed} removed, {len(keep)} remaining after dedup")
+    print("label distribution after dedup:")
     print(dedup_df["label"].value_counts().to_string())
 
     out.parent.mkdir(parents=True, exist_ok=True)
     dedup_df.to_csv(out, index=False)
-    print(f"去重清单已写出：{out}")
+    print(f"deduplicated manifest written to {out}")
 
 
 def stratified_split(df: pd.DataFrame, seed: int) -> dict[str, pd.DataFrame]:
-    """按 source 大类分层 70/15/15，与 prepare_dataset.py 同逻辑（test 取剩余）。"""
+    """70/15/15 stratified by source class, the same logic as prepare_dataset.py, with test
+    taking the remainder."""
     rng = random.Random(seed)
     out = {"train": [], "val": [], "test": []}
     for source in sorted(df["source"].unique()):
@@ -146,33 +158,34 @@ def do_split(manifest: Path, out_dir: Path, prefix: str, seed: int,
         sdf["split"] = name
         sdf[CSV_FIELDS].to_csv(out_dir / f"{prefix}{name}.csv", index=False)
     if not quiet:
-        print(f"[seed={seed}] 切分（去重清单 {len(df)} 张）：")
+        print(f"[seed={seed}] split of the deduplicated manifest ({len(df)} images):")
         for name in ("train", "val", "test"):
             s = splits[name]
             pos = int((s["label"] == 1).sum())
-            print(f"  {name:<5} {len(s):>4} | 正 {pos:>3} | 负 {len(s) - pos:>3} | "
-                  f"正/负={pos / max(1, len(s) - pos):.3f}")
+            print(f"  {name:<5} {len(s):>4} | pos {pos:>3} | neg {len(s) - pos:>3} | "
+                  f"pos/neg={pos / max(1, len(s) - pos):.3f}")
         print(f"  → {out_dir}/{prefix}{{train,val,test}}.csv")
     return splits
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="去重 + 分层重切分。")
+    p = argparse.ArgumentParser(description="Deduplicate and re-split, stratified.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pb = sub.add_parser("build", help="构建去重清单")
+    pb = sub.add_parser("build", help="build the deduplicated manifest")
     pb.add_argument("--data-root", type=Path, default=Path("data/processed"))
     pb.add_argument("--manifest", type=Path, default=Path("data/processed/manifest.csv"))
     pb.add_argument("--out", type=Path, default=Path("data/processed/manifest_dedup.csv"))
     pb.add_argument("--phash-th", type=int, default=6)
     pb.add_argument("--pixel-corr", type=float, default=0.90)
     pb.add_argument("--exclude-subclass", action="append", default=None,
-                    help="剔除指定子类（可重复）；边界收窄用，被剔除行另存归档清单。")
+                    help="exclude these subclasses; may be repeated. Used for boundary narrowing, with the "
+                         "removed rows archived to a separate manifest.")
     pb.add_argument("--excluded-out", type=Path,
                     default=Path("data/processed/manifest_out_of_scope.csv"),
-                    help="被剔除行的归档清单输出路径。")
+                    help="output path for the archive manifest of removed rows.")
 
-    ps = sub.add_parser("split", help="对去重清单分层切分")
+    ps = sub.add_parser("split", help="stratified split of the deduplicated manifest")
     ps.add_argument("--manifest", type=Path, default=Path("data/processed/manifest_dedup.csv"))
     ps.add_argument("--out-dir", type=Path, default=Path("data/processed"))
     ps.add_argument("--prefix", type=str, default="dedup_")

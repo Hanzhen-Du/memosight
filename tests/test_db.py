@@ -1,4 +1,4 @@
-"""M1: SQLite schema + 数据模型 + 增删查 单元测试。"""
+"""M1: unit tests for the SQLite schema, the data model and CRUD."""
 
 import json
 import tempfile
@@ -14,7 +14,7 @@ def sample_card(**overrides) -> MemoryCard:
     base = dict(
         timestamp="2026-07-06T10:00:00+00:00",
         trigger_confidence=0.91,
-        ocr_text="设计评审会 白板 Q3 路线图",
+        ocr_text="design review whiteboard Q3 roadmap",
     )
     base.update(overrides)
     return MemoryCard(**base)
@@ -22,10 +22,11 @@ def sample_card(**overrides) -> MemoryCard:
 
 class TestMemoryCardModel(unittest.TestCase):
     def test_tags_json_roundtrip(self):
-        card = sample_card(tags=["meeting", "白板", "roadmap"])
+        # "café" keeps non-ASCII round-trip coverage through JSON and SQLite
+        card = sample_card(tags=["meeting", "café", "roadmap"])
         raw = card.tags_json()
-        self.assertEqual(json.loads(raw), ["meeting", "白板", "roadmap"])
-        self.assertEqual(MemoryCard.tags_from_json(raw), ["meeting", "白板", "roadmap"])
+        self.assertEqual(json.loads(raw), ["meeting", "café", "roadmap"])
+        self.assertEqual(MemoryCard.tags_from_json(raw), ["meeting", "café", "roadmap"])
 
     def test_tags_none_stays_none(self):
         card = sample_card()
@@ -84,14 +85,14 @@ class TestCardStore(unittest.TestCase):
         self.assertEqual(len(limited), 2)
 
     def test_search_ocr_and_tags(self):
-        c1 = sample_card(ocr_text="Kubernetes 部署架构图")
-        c2 = sample_card(ocr_text="午餐菜单")
+        c1 = sample_card(ocr_text="Kubernetes deployment architecture diagram")
+        c2 = sample_card(ocr_text="lunch menu")
         self.store.insert(c1)
         cid2 = self.store.insert(c2)
-        # 给 c2 打上 tags 再按 tag 搜
-        self.store.enrich_card(cid2, ["food", "restaurant", "菜单"])
+        # Tag c2, then search by tag
+        self.store.enrich_card(cid2, ["food", "restaurant", "menu"])
 
-        by_text = self.store.search("kubernetes")  # 大小写不敏感
+        by_text = self.store.search("kubernetes")  # case-insensitive
         self.assertEqual(len(by_text), 1)
         self.assertIn("Kubernetes", by_text[0].ocr_text)
 
@@ -99,7 +100,7 @@ class TestCardStore(unittest.TestCase):
         self.assertEqual(len(by_tag), 1)
         self.assertEqual(by_tag[0].id, cid2)
 
-        none = self.store.search("量子计算")
+        none = self.store.search("quantum computing")
         self.assertEqual(none, [])
 
     def test_enrich_updates_status_and_tags(self):
@@ -123,7 +124,7 @@ class TestCardStore(unittest.TestCase):
 
     def test_list_pending_fifo(self):
         ids = [self.store.insert(sample_card(ocr_text=f"c{i}")) for i in range(3)]
-        # 补第二张
+        # Add a second card
         self.store.enrich_card(ids[1], ["done"])
         pending = self.store.list_pending()
         self.assertEqual([c.id for c in pending], [ids[0], ids[2]])
@@ -132,16 +133,16 @@ class TestCardStore(unittest.TestCase):
         cid = self.store.insert(sample_card())
         self.assertTrue(self.store.delete(cid))
         self.assertIsNone(self.store.get(cid))
-        self.assertFalse(self.store.delete(cid))  # 二次删除返回 False
+        self.assertFalse(self.store.delete(cid))  # deleting twice returns False
 
     def test_persist_across_reopen(self):
-        cid = self.store.insert(sample_card(ocr_text="持久化验证"))
+        cid = self.store.insert(sample_card(ocr_text="persistence check"))
         self.store.close()
         store2 = CardStore(self.db_path)
         try:
             got = store2.get(cid)
             self.assertIsNotNone(got)
-            self.assertEqual(got.ocr_text, "持久化验证")
+            self.assertEqual(got.ocr_text, "persistence check")
         finally:
             store2.close()
 

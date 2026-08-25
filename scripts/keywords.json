@@ -1,10 +1,10 @@
 {
-  "_说明": "守门员训练数据采集的关键词配置。增删关键词直接改这里即可。",
-  "_字段": "category=类别文件夹名；query=Pexels 搜索词；count=想下载多少张。",
-  "_类别约定": {
-    "positive": "正例：屏幕有用文字（PPT、投影、代码屏、文档）",
-    "negative_noise": "反例-噪声文字：招牌、书脊、包装文字、锁屏等",
-    "negative_clean": "反例-无文字：风景、人像、物体等"
+  "_about": "Keyword configuration for gatekeeper training-data collection. Add or remove keywords here; no code change is needed.",
+  "_fields": "category = the class folder name; query = the Pexels search term; count = how many images to download.",
+  "_categories": {
+    "positive": "useful text on a screen: slides, projector, code screen, document",
+    "negative_noise": "negative, text that is not a launch scene: signage, book spines, packaging text, lock screens",
+    "negative_clean": "negative, no text: landscapes, portraits, objects"
   },
 
   "positive": [

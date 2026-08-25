@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""生成 10 张图端到端测试的图文对照可视化（自包含单 HTML）。
+"""Generate a side-by-side visualisation of the 10-image end-to-end test, as one
+self-contained HTML file.
 
-数据来源：
-- 图片路径：与 e2e 相同的分层抽样（seed=42，确定性 → 同一批 10 张）。
-- OCR 文本 + DeepSeek tags + 状态：从 data/mvp_demo/test_e2e.db 读（id 升序 = 抽样顺序）。
+Data sources:
+- image paths: the same stratified sample as the end-to-end test (seed 42, deterministic, so
+  it is the same 10 images);
+- OCR text, DeepSeek tags and status: read from data/mvp_demo/test_e2e.db, in ascending id
+  order, which is the sampling order.
 
-图片以 base64 缩略图内嵌，产出单个 HTML，可直接浏览器打开投屏。
-用法：.venv/bin/python scripts/gen_e2e_showcase.py
-产出：demo/e2e_showcase.html
+Thumbnails are embedded as base64, producing a single HTML file that opens directly in a
+browser.
+Usage:  .venv/bin/python scripts/gen_e2e_showcase.py
+Output: demo/e2e_showcase.html
 """
 
 from __future__ import annotations
@@ -30,18 +34,19 @@ from pipeline.db import CardStore        # noqa: E402
 OUT = REPO_ROOT / "demo" / "e2e_showcase.html"
 DB = REPO_ROOT / "data" / "mvp_demo" / "test_e2e.db"
 
-# 稀疏（近空/少文字，[]是正确的）类别；其余空标签归为 OCR 失败
+# Sparse categories: nearly empty or very little text, where [] is the correct answer.
+# Any other empty tag list is classified as an OCR failure.
 SPARSE_CATS = {"projector_slide_screen_empty_room", "data_dashboard_monitor"}
 
-# 成功案例的亮点注解（证明"输入清晰时 OCR+AI 标签质量高"）
+# Notes on the successful cases, showing that OCR plus tagging is good when the input is clear
 HILITE = {
-    "laptop_screen_code": "网页 UI 代码 → 精准技术栈标签",
-    "source_code_on_monitor_closeup": "JS 源码 → 框架级标签（Backbone/router）",
-    "document_page_text": "乒乓球课程文档（印尼语）→ 领域标签",
-    "tablet_displaying_text_document": "OCR 较糊，DeepSeek 仍从乱码中救出 STOCK MARKET",
+    "laptop_screen_code": "web UI code, giving precise technology-stack tags",
+    "source_code_on_monitor_closeup": "JavaScript source, giving framework-level tags (Backbone, router)",
+    "document_page_text": "a table-tennis course document in Indonesian, giving domain tags",
+    "tablet_displaying_text_document": "blurry OCR, yet DeepSeek still recovered STOCK MARKET from the noise",
 }
-NOTE_SPARSE = "屏幕近空 / 仪表盘少文字 → 正确返回 []（不瞎编）"
-NOTE_FAIL = "文字存在，但摆拍斜角 / 眩光 / 远距 / 手写 → OCR 读成乱码 → []"
+NOTE_SPARSE = "a nearly empty screen or a dashboard with little text: [] is the correct answer, and nothing was invented"
+NOTE_FAIL = "text is present, but the posed angle, glare, distance or handwriting made OCR return noise, so []"
 
 
 def thumb_b64(path: Path, width: int = 480) -> str:
@@ -79,16 +84,16 @@ def build_cards():
             "ocr": ocr, "chars": len(ocr), "tags": card.tags or [],
             "verdict": v, "note": note,
         })
-    # 排序：成功在前、稀疏中间、失败在后
+    # Order: successes first, sparse in the middle, failures last
     rank = {"success": 0, "sparse": 1, "fail": 2}
     out.sort(key=lambda c: rank[c["verdict"]])
     return out
 
 
 VERDICT_META = {
-    "success": ("成功 · SUCCESS", "#16a34a"),
-    "sparse":  ("稀疏 · SPARSE", "#6b7280"),
-    "fail":    ("OCR失败 · OCR-FAIL", "#dc2626"),
+    "success": ("SUCCESS", "#16a34a"),
+    "sparse":  ("SPARSE", "#6b7280"),
+    "fail":    ("OCR FAILED", "#dc2626"),
 }
 
 
@@ -100,7 +105,7 @@ def render(cards) -> str:
         label, color = VERDICT_META[c["verdict"]]
         ocr_disp = html.escape(c["ocr"][:320]) + ("…" if c["chars"] > 320 else "")
         if not c["ocr"]:
-            ocr_disp = "<span class='empty'>（无文本）</span>"
+            ocr_disp = "<span class='empty'>(no text)</span>"
         tags_html = "".join(
             f"<span class='tag'>{html.escape(t)}</span>" for t in c["tags"]
         ) or "<span class='notags'>[]</span>"
@@ -110,12 +115,12 @@ def render(cards) -> str:
         <div class="thumbwrap"><img src="{c['img']}" alt="{html.escape(c['name'])}"></div>
         <div class="mid">
           <div class="cat">{html.escape(c['cat'])}</div>
-          <div class="ocrlabel">OCR 文本 · {c['chars']} 字符</div>
+          <div class="ocrlabel">OCR text, {c['chars']} characters</div>
           <div class="ocr">{ocr_disp}</div>
           <div class="note">{html.escape(c['note'])}</div>
         </div>
         <div class="right">
-          <div class="tagslabel">DeepSeek 标签</div>
+          <div class="tagslabel">DeepSeek tags</div>
           <div class="tags">{tags_html}</div>
         </div>
       </div>""")
@@ -123,7 +128,7 @@ def render(cards) -> str:
     return f"""<!doctype html>
 <html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MemoSight · 端到端测试图文对照</title>
+<title>MemoSight end-to-end test results</title>
 <style>
   :root {{ --ok:#16a34a; --grey:#6b7280; --fail:#dc2626; --ink:#0f172a; --muted:#64748b; }}
   * {{ box-sizing:border-box; }}
@@ -168,25 +173,27 @@ def render(cards) -> str:
   @media (max-width:820px) {{ .card {{ grid-template-columns:1fr; }} }}
 </style></head>
 <body><div class="wrap">
-  <h1>MemoSight · 守门员之后的端到端闭环验证</h1>
-  <div class="sub">10 张真实正例图 → 真 Tesseract OCR → 真 DeepSeek 标签 → SQLite（电脑端软件闭环验证）</div>
+  <h1>MemoSight: end-to-end verification of the stage after the gatekeeper</h1>
+  <div class="sub">10 real positive images, real Tesseract OCR, real DeepSeek tags, SQLite. Software loop verified on a laptop.</div>
 
   <div class="stats">
-    <div class="stat g"><div class="num">{n}/{n}</div><div class="lab">软件闭环走通 · 零崩溃</div></div>
-    <div class="stat b"><div class="num">100%</div><div class="lab">DeepSeek 调用成功率</div></div>
-    <div class="stat"><div class="num">✓</div><div class="lab">OCR 乱码时正确返回 [] · 不瞎编</div></div>
-    <div class="stat"><div class="num">{n_ok}/{n}</div><div class="lab">OCR 出有效文本 → 生成标签</div></div>
+    <div class="stat g"><div class="num">{n}/{n}</div><div class="lab">completed the loop, zero crashes</div></div>
+    <div class="stat b"><div class="num">100%</div><div class="lab">DeepSeek call success rate</div></div>
+    <div class="stat"><div class="num">Pass</div><div class="lab">returns [] when OCR is noise, inventing nothing</div></div>
+    <div class="stat"><div class="num">{n_ok}/{n}</div><div class="lab">OCR produced usable text, so tags were generated</div></div>
   </div>
 
   <div class="caveat">
-    <b>⚠ 诚实说明：</b>这 10 张是 <b>Pexels 艺术摆拍照</b>（刻意斜角 / 反光 / 远距离），
-    比真实用例（<b>头戴摄像头正对白板 / 屏幕</b>）难得多。真实场景下 OCR 命中率预计<b>明显更高</b>，
-    待树莓派抓到真实帧后重测校准。本页展示的是"最难输入"下的下界表现。
+    <b>An honest caveat.</b> These 10 are posed Pexels stock photographs, deliberately shot at an
+    angle, with reflections and from a distance, which makes them much harder than the real use
+    case of a head-mounted camera pointed straight at a whiteboard or screen. OCR hit rate should
+    be noticeably higher in the real setting, and this will be re-measured once the Raspberry Pi
+    captures real frames. What this page shows is the lower bound, on the hardest input.
   </div>
 
   {"".join(card_html)}
 
-  <div class="foot">数据：test_e2e.db（seed=42 分层抽样 10 张）· 排序：成功 → 稀疏 → OCR失败 · 由 scripts/gen_e2e_showcase.py 生成</div>
+  <div class="foot">Data: test_e2e.db, 10 images stratified-sampled with seed 42. Ordered success, sparse, OCR-failed. Generated by scripts/gen_e2e_showcase.py</div>
 </div></body></html>"""
 
 
@@ -194,7 +201,8 @@ def main():
     cards = build_cards()
     OUT.write_text(render(cards), encoding="utf-8")
     kb = OUT.stat().st_size / 1024
-    print(f"已生成 {OUT}  ({kb:.0f} KB, {len(cards)} 卡片, {sum(1 for c in cards if c['verdict']=='success')} 成功)")
+    print(f"generated {OUT}  ({kb:.0f} KB, {len(cards)} cards, "
+          f"{sum(1 for c in cards if c['verdict']=='success')} successful)")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 {
-  "_comment": "Task2b 投影屏补量第二轮：第一轮近义词命中大量已有图（29 跳过），投影屏概念仅到 14 张 < 目标 25-30。换更广的『空白大屏/投影面』场景再补，仍带 blank/empty 压污染。",
-  "_label": "category=negative_clean → label 0，进 data/raw/negative_clean（训练负例）。本阶段不跑 prepare_dataset。",
+  "_comment": "Task 2b projector-screen top-up, round two. Round one's synonyms mostly returned images already held (29 skipped) and the projector-screen concept only reached 14, below the 25-30 target. This uses broader blank large screen and projection surface scenes, still carrying blank and empty to limit contamination.",
+  "_label": "category=negative_clean, so label 0, into data/raw/negative_clean as training negatives. This phase does not run prepare_dataset.",
   "_usage": "python3 scripts/download_images.py --config scripts/keywords_task2b_neg_projector_topup2.json --output-root data/raw",
   "negative_clean": [
     {"query": "movie theater empty blank screen interior", "count": 12},

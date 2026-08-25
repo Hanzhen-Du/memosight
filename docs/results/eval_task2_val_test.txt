@@ -5,7 +5,7 @@
 RESULT {"model": "models/gatekeeper_task2_mvp.keras", "threshold": 0.5, "val": {"threshold": 0.5, "n": 364, "n_pos": 157, "n_neg": 207, "accuracy": 0.772, "precision": 0.7403, "recall": 0.7261, "f1": 0.7331, "fn_rate": 0.2739, "fp_rate": 0.1932, "confusion": {"tn": 167, "fp": 40, "fn": 43, "tp": 114}}, "test": {"threshold": 0.5, "n": 369, "n_pos": 159, "n_neg": 210, "accuracy": 0.7642, "precision": 0.7466, "recall": 0.6855, "f1": 0.7148, "fn_rate": 0.3145, "fp_rate": 0.1762, "confusion": {"tn": 173, "fp": 37, "fn": 50, "tp": 109}}}
 
 ## val threshold sweep (pick deploy threshold on VAL, not on probe)
-  thr    prec  recall      F1     FN率     FP率
+  thr    prec  recall      F1      FN      FP
  0.05  0.5032  0.9936  0.6681  0.0064  0.7440
  0.10  0.5426  0.9745  0.6970  0.0255  0.6232
  0.15  0.5798  0.9490  0.7198  0.0510  0.5217

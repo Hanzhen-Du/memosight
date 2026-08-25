@@ -1,71 +1,104 @@
-# hardware/ — 树莓派 5 边缘部署
+# hardware/ — Raspberry Pi 5 edge deployment
 
-守门员在 **Raspberry Pi 5 + Camera Module 3** 上的端侧部署代码。
-落地项目命门——**级联感知**：常开守门员只看低分辨率灰度流，只有判"记"时才抓高清做下游处理。**不连续录像**。
+On-device deployment code for the gatekeeper, targeting a Raspberry Pi 5 with Camera Module 3.
 
-## 目标环境
-- Raspberry Pi 5，Camera Module 3，Raspberry Pi OS。
-- 运行时：**LiteRT**（`ai_edge_litert`）。代码会在缺它时回退到 `tensorflow.lite`，方便笔记本自测。
-- 模型已在 Pi 上：`~/dev/memosight/models/gatekeeper_v4_mvp_int8.tflite`
-  （int8，输入 `(1,96,96,1)` int8 灰度，输出 `(1,2)` int8）。
+This is where the project's central idea becomes real. The always-on gatekeeper watches only a
+low-resolution greyscale stream, and a full-resolution grab plus downstream processing happens
+only when it decides the frame is worth recording. Nothing is recorded continuously.
 
-## 文件
-| 文件 | 作用 |
+## Target environment
+
+- Raspberry Pi 5, Camera Module 3, Raspberry Pi OS.
+- Runtime: LiteRT (`ai_edge_litert`). The code falls back to `tensorflow.lite` when it is
+  missing, which makes the same code testable on a laptop.
+- The model is already on the Pi at
+  `~/dev/memosight/models/gatekeeper_v4_mvp_int8.tflite`: int8, input `(1,96,96,1)` int8
+  greyscale, output `(1,2)` int8.
+
+## Files
+
+| File | Purpose |
 |---|---|
-| `infer.py` | 共享推理模块（importable）：`load_model` / `preprocess` / `predict`。预处理口径与训练一致（灰度、INTER_AREA、按模型量化参数转 int8）。 |
-| `benchmark_latency.py` | 纯推理延迟基准：随机 int8 输入，20 warm-up + 200 计时，报 mean/p50/p95/p99/吞吐。 |
-| `camera_test.py` | 相机自检（Picamera2）：抓几帧，存全分辨率 JPEG + 96×96 灰度 PNG。**相机接上后第一个跑。** |
-| `cascade.py` | 级联主循环（今天仅 `gated`）：低分辨率流→守门员→命中才抓高清存盘+记日志+(可选)推回。 |
-| `receiver_laptop.py` | **笔记本端**接收器，配 `cascade.py --push`。 |
+| `infer.py` | Shared, importable inference module: `load_model`, `preprocess`, `predict`. Preprocessing matches training exactly (greyscale, INTER_AREA, quantised to int8 using the model's own parameters). |
+| `benchmark_latency.py` | Pure inference latency benchmark: random int8 input, 20 warm-up iterations then 200 timed, reporting mean, p50, p95, p99 and throughput. |
+| `camera_test.py` | Camera self-test via Picamera2: grab a few frames and save a full-resolution JPEG plus a 96x96 greyscale PNG. Run this first once the camera is connected. |
+| `cascade.py` | The cascade main loop, currently `gated` only: low-resolution stream, gatekeeper, and on a hit grab full resolution, save it, log it, and optionally push it back. |
+| `receiver_laptop.py` | Laptop-side receiver, paired with `cascade.py --push`. |
 
-## Pi 端依赖
-优先用已装的：`ai_edge_litert`、`opencv-headless`(cv2)、`numpy`。
+## Dependencies on the Pi
 
-**可能需要另装**：
+Prefer what is already installed: `ai_edge_litert`, `opencv-headless` (cv2), `numpy`.
+
+You may need to install:
+
 ```bash
-sudo apt install -y python3-picamera2   # Camera Module 3 驱动，随 Pi OS 发行但不一定预装；含 libcamera 系统依赖，勿用 pip
+sudo apt install -y python3-picamera2   # Camera Module 3 driver. Ships with Pi OS but is not always preinstalled.
+                                        # It pulls in libcamera system dependencies, so do not install it with pip.
 ```
-`camera_test.py` / `cascade.py` 需要 `picamera2`；`infer.py` / `benchmark_latency.py` 不需要。
 
-## 从笔记本同步代码 + 模型到 Pi（手动）
-代码进 git，但**模型/数据按 `.gitignore` 不入库**，需手动传：
+`camera_test.py` and `cascade.py` need `picamera2`; `infer.py` and `benchmark_latency.py` do
+not.
+
+## Syncing code and the model to the Pi
+
+Code is in git, but models and data are excluded by `.gitignore`, so the model has to be copied
+manually.
+
 ```bash
-# 笔记本上执行。<pi> = pi@<树莓派IP>
-# 1) 代码：在 Pi 上 git pull 本分支，或直接 scp hardware/
+# Run on the laptop. <pi> = pi@<raspberry pi ip>
+# 1) Code: either git pull on the Pi, or copy hardware/ across
 rsync -av hardware/ <pi>:~/dev/memosight/hardware/
-# 2) 模型（不在 git 里，必须单独传）
+# 2) Model: not in git, must be transferred separately
 scp models/gatekeeper_v4_mvp_int8.tflite <pi>:~/dev/memosight/models/
 ```
 
-## 在 Pi 上运行（仓库根目录 `~/dev/memosight`）
+## Running on the Pi
+
+From the repository root, `~/dev/memosight`.
+
 ```bash
-# 0) 相机自检（接上相机后第一步）
+# 0) Camera self-test. First thing to run once the camera is connected
 python3 hardware/camera_test.py --outdir hardware/captures
 
-# 1) 纯推理延迟基准
+# 1) Pure inference latency benchmark
 python3 hardware/benchmark_latency.py \
     --model ~/dev/memosight/models/gatekeeper_v4_mvp_int8.tflite
 
-# 2) 级联主循环（gated）。--fps 是占空比/Pareto 旋钮。
+# 2) Cascade main loop, gated mode. --fps is the duty-cycle knob from the Pareto curve
 python3 hardware/cascade.py --fps 3
-python3 hardware/cascade.py --fps 3 --threshold 0.55   # 调 FN/FP 工作点
+python3 hardware/cascade.py --fps 3 --threshold 0.55   # move the FN/FP operating point
 ```
 
-## 可选：命中帧 WiFi 推回笔记本
-默认**关**（`--push` 才开），网络不稳也不影响核心循环；命中帧始终先存本地 `captures/`。
+## Optional: push hit frames to a laptop over WiFi
+
+Off by default; `--push` enables it. An unstable network does not affect the core loop, because
+hit frames are always written to local `captures/` first.
+
 ```bash
-# 笔记本上先起接收器
+# Start the receiver on the laptop
 python3 hardware/receiver_laptop.py --outdir ~/memosight_received --port 8000
-# Pi 上开 push（<laptop> = 笔记本局域网 IP）
+# Enable push on the Pi. <laptop> = the laptop's LAN address
 python3 hardware/cascade.py --fps 3 --push --host <laptop> --port 8000
 ```
-推回用 stdlib HTTP POST（零新依赖，Pi 主动发起）。推失败会降级——帧留在 `captures/`，可事后 `rsync` 拉回。**仅限可信局域网。**
 
-## 运行产物（不入库）
-`hardware/captures/`（命中高清帧 + `hits.log`）是运行时产物，由 `hardware/.gitignore` 排除。
+The push is a stdlib HTTP POST initiated by the Pi, so it adds no dependency. A failed push
+degrades gracefully: the frame stays in `captures/` and can be pulled with `rsync` later. Use
+this on a trusted local network only.
 
-## 路线图（今天**未**做，明确留 TODO）
-- **gated vs always 功耗 A/B**：`cascade.should_record()` 已把决策隔离成一个函数，
-  将来开 `--mode always` 只需一行（见该函数 TODO）。今天不实现，恪守低功耗论点。
-- **ESP32 真机验证**：本目录是 Pi（宽容环境）；ESP32-ready 仍需另测 arena 占用 / kernel 数值一致性 / 延迟功耗。
-- **功耗测量 + Pareto 曲线**：扫 `--fps`（和将来的分辨率/阈值）画"功耗 vs 漏报"。
+## Runtime output
+
+`hardware/captures/`, holding hit frames at full resolution plus `hits.log`, is runtime output
+and is excluded by `hardware/.gitignore`.
+
+## Roadmap
+
+Not done yet, recorded here as explicit TODOs.
+
+- Gated versus always-on power A/B. `cascade.should_record()` already isolates the decision into
+  a single function, so adding `--mode always` later is a one-line change (see the TODO in that
+  function). It is deliberately not implemented yet, to keep the low-power claim honest.
+- ESP32 on-device verification. This directory targets the Pi, which is a forgiving environment.
+  Being ESP32-ready still requires separately measuring arena occupancy, kernel numerical
+  agreement, and latency and power.
+- Power measurement and the Pareto curve. Sweep `--fps`, and later resolution and threshold, to
+  plot power against missed captures.

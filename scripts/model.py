@@ -1,39 +1,43 @@
 #!/usr/bin/env python3
-"""守门员第一版小 CNN —— 建模 + 逐层激活内存核算（ESP32 移植硬关卡）。
+"""The gatekeeper CNN: model definition plus per-layer activation memory accounting, which is
+the hard gate for ESP32 portability.
 
-模型（守门员二分类：记=1 / 不记=0）：
-  输入 96×96×1 灰度
-  4 个 block：Conv(3×3,'same') + BatchNorm + ReLU + MaxPool(2×2)
-              通道 8 → 16 → 32 → 64，空间 96→48→24→12→6
-  收尾：AveragePooling2D(6×6 全图) → Reshape(64) → Dense(2) → Softmax
+Model (binary gatekeeper: record = 1, do not record = 0):
+  input 96x96x1 greyscale
+  4 blocks: Conv(3x3, same) + BatchNorm + ReLU + MaxPool(2x2)
+            channels 8, 16, 32, 64; spatial 96 -> 48 -> 24 -> 12 -> 6
+  tail: AveragePooling2D over the whole 6x6 -> Reshape(64) -> Dense(2) -> Softmax
 
-> 关于"全局平均池化"的实现选择（重要，影响 TFLM 可移植性）：
->   任务原文写 GlobalAveragePooling2D，但 Keras 的 GAP 导出 TFLite 时
->   通常变成 MEAN(reduce_mean) 算子，而 MEAN 不在 TFLM 白名单里
->   (白名单：Conv2D/DepthwiseConv2D/AveragePool2D/MaxPool2D/Reshape/
->    FullyConnected/Softmax)。为严守白名单，这里用 AveragePooling2D 对
->   整张 6×6 feature map 做平均（等价于全局平均池化）+ Reshape 拉平，
->   三个算子全在白名单内。语义等价，导出可控。
->
-> ⚠️ 导出验证修正（2026-06-18）：上面"全在白名单内"原是建模期的**静态算子核算**，
->   从未真正导出验证过。2026-06-18 首次实际导出 .tflite 才发现：若以默认**动态
->   batch(-1)** 导出，flatten 的 Reshape 会在运行时用 SHAPE/STRIDED_SLICE/PACK
->   动态拼形状——这三个算子**不在 TFLM 白名单内**。白名单保证**仅当以固定
->   batch_shape=(1,96,96,1) 导出**时成立（形状全静态、Reshape 退化为常量）。
->   导出脚本 `scripts/export_tflite.py` 已固定 batch=1 并自动核对算子表。
+On the choice of global average pooling, which affects TFLM portability. The obvious
+implementation is GlobalAveragePooling2D, but Keras GAP usually exports to TFLite as a MEAN
+(reduce_mean) operator, and MEAN is not on the TFLite Micro whitelist (which covers Conv2D,
+DepthwiseConv2D, AveragePool2D, MaxPool2D, Reshape, FullyConnected and Softmax). To stay inside
+the whitelist, this averages the whole 6x6 feature map with AveragePooling2D, which is
+equivalent to global average pooling, then flattens with Reshape. All three operators are
+whitelisted, the semantics are the same, and the export is predictable.
 
-> 关于 BatchNorm：仅训练用。导出 int8 TFLite 时，Conv(use_bias=False)+BN
->   会被 TFLite 转换器自动折叠进前面的 Conv，不会留独立 BN 算子。
+Correction after export verification, 2026-06-18. The claim above that everything is
+whitelisted was originally a static operator count made while modelling, never verified by an
+actual export. The first real .tflite export showed that with the default dynamic batch (-1),
+flatten's Reshape assembles its shape at runtime via SHAPE, STRIDED_SLICE and PACK, none of
+which are whitelisted. The whitelist guarantee holds only when the model is exported with
+batch_shape=(1,96,96,1) pinned, so every shape is static and the Reshape collapses to a
+constant. The export script `scripts/export_tflite.py` now pins batch 1 and checks the operator
+table automatically.
 
-激活内存核算（int8 下每个元素 1 字节）：
-  对每层输出 feature map 计算 H×W×C 字节，打印表格并标出峰值层。
-  **峰值 > 256KB 立即判定为超预算（脚本返回非零、打印 STOP），不许估算了事。**
+On BatchNorm: it is used during training only. When exporting to int8 TFLite, Conv with
+use_bias=False followed by BN is folded into the preceding Conv by the converter, so no
+separate BN operator survives.
 
-依赖：tensorflow==2.19.*（见 requirements.txt）。
+Activation memory accounting, at 1 byte per element under int8: for each layer's output feature
+map, compute H*W*C bytes, print a table and mark the peak layer. A peak above 256 KB is
+immediately over budget — the script returns non-zero and prints STOP rather than settling for
+an estimate.
 
-示例：
-  python scripts/model.py            # 建模 + 打印内存核算表
-  python scripts/model.py --size 96
+Dependencies: tensorflow==2.19.* (see requirements.txt).
+
+Example:
+  python scripts/model.py            # build the model and print the memory table
 """
 
 from __future__ import annotations
@@ -43,10 +47,10 @@ import sys
 
 import tensorflow as tf
 
-# ESP32 峰值激活内存硬预算（KB）。超过即停。
+# Hard ESP32 peak activation memory budget, in KB. Exceeding it stops the run.
 ACT_MEM_BUDGET_KB = 256
 
-# int8 量化后每个激活元素占用字节数。
+# Bytes per activation element after int8 quantisation.
 BYTES_PER_ELEM_INT8 = 1
 
 
@@ -57,36 +61,49 @@ def build_model(
     convs_per_stage: int | tuple[int, ...] = 1,
     name: str = "gatekeeper_v1",
 ) -> tf.keras.Model:
-    """构建守门员小 CNN（Functional API，保证各层输出形状是具体值，便于内存核算）。
+    """Build the gatekeeper CNN with the functional API, which keeps every layer's output
+    shape concrete and therefore accountable for memory.
 
-    bn_momentum：BatchNorm 滑动平均的 momentum。短训练时默认 0.99 收敛太慢、
-    会导致推理统计量不准（训练/推理塌缩）；可调小（0.9/0.8）让滑动统计量更快跟上。
-    注意：这是训练超参，不改网络结构；导出时 BN 仍会折叠进 Conv。
+    bn_momentum is the momentum of BatchNorm's moving averages. The default of 0.99 converges
+    too slowly for short training runs, leaving inference statistics inaccurate and causing the
+    train/inference mismatch. Lowering it (0.9 or 0.8) lets the moving statistics keep up. This
+    is a training hyperparameter and does not change the network structure; BN is still folded
+    into Conv at export.
 
-    复杂度旋钮（Task1：在 ESP32 预算内推高准确率）：
-      - channels：每个 stage 的通道数，长度=stage 数。默认 (8,16,32,64) 复现基线。
-        加宽早期 stage（96×96 空间）极吃激活内存，加宽晚期 stage 极廉价——见 §激活核算。
-      - convs_per_stage：每个 stage 在 pool 前堆几个 Conv+BN+ReLU（int 或与 channels 等长的元组）。
-        默认 1 复现基线，逐 stage 各层命名与基线**完全一致**（block{i}_conv/_bn/_relu/_pool），
-        保证 baseline .keras 可无缝复训/加载。
-    结构铁律（保 TFLM 白名单）：tail 一律 AveragePooling2D(整张 HxW) → Reshape → Dense(2) → Softmax，
-    不引入 GAP/MEAN 等非白名单算子；不改 Conv/Pool/BN 的算子种类，只改通道/深度/stage 数。
+    Complexity knobs, used in task1 to push accuracy inside the ESP32 budget:
+      - channels: channel count per stage; its length is the number of stages. The default
+        (8,16,32,64) reproduces the baseline. Widening an early stage, at 96x96 spatial
+        resolution, is very expensive in activation memory; widening a late stage is very
+        cheap. See the accounting section.
+      - convs_per_stage: how many Conv+BN+ReLU to stack before the pool in each stage, as an
+        int or a tuple the same length as channels. The default of 1 reproduces the baseline,
+        and the per-stage layer names match the baseline exactly
+        (block{i}_conv, _bn, _relu, _pool), so a baseline .keras can be retrained or loaded
+        without changes.
+
+    Structural rule, to keep the TFLM whitelist intact: the tail is always
+    AveragePooling2D over the full HxW, then Reshape, Dense(2) and Softmax. No GAP, MEAN or
+    other non-whitelisted operator is introduced, and the operator types of Conv, Pool and BN
+    never change. Only channel counts, depth and stage count vary.
     """
     n_stages = len(channels)
     if isinstance(convs_per_stage, int):
         convs_per_stage = (convs_per_stage,) * n_stages
     if len(convs_per_stage) != n_stages:
         raise ValueError(
-            f"convs_per_stage 长度 {len(convs_per_stage)} 必须等于 channels 长度 {n_stages}"
+            f"convs_per_stage has length {len(convs_per_stage)}, which must equal the "
+            f"channels length {n_stages}"
         )
 
     inputs = tf.keras.Input(shape=(size, size, 1), name="input")
     x = inputs
     for i, (ch, nconv) in enumerate(zip(channels, convs_per_stage), start=1):
         for j in range(nconv):
-            # nconv==1 时层名与基线完全一致（无数字后缀），保证可复现/可加载旧权重。
+            # With nconv == 1 the layer names match the baseline exactly, with no numeric
+            # suffix, so old weights stay loadable and results reproducible.
             suffix = "" if nconv == 1 else str(j + 1)
-            # Conv 不带 bias：后面接 BN，BN 的 beta 充当偏置；这样 Conv+BN 折叠最干净。
+            # Conv without bias: BN follows and its beta acts as the bias, which makes the
+            # Conv+BN fold cleanest.
             x = tf.keras.layers.Conv2D(
                 ch, 3, padding="same", use_bias=False, name=f"block{i}_conv{suffix}"
             )(x)
@@ -96,8 +113,9 @@ def build_model(
             x = tf.keras.layers.ReLU(name=f"block{i}_relu{suffix}")(x)
         x = tf.keras.layers.MaxPooling2D(2, name=f"block{i}_pool")(x)
 
-    # 全局平均池化的 TFLM 安全写法：对剩余 HxW 做 AveragePool2D，再 Reshape 拉平。
-    pooled_hw = x.shape[1]  # 基线为 6；更多 stage 时更小
+    # TFLM-safe global average pooling: AveragePool2D over the remaining HxW, then Reshape to
+    # flatten.
+    pooled_hw = x.shape[1]  # 6 in the baseline, smaller with more stages
     x = tf.keras.layers.AveragePooling2D(pool_size=pooled_hw, name="gap_avgpool")(x)
     x = tf.keras.layers.Reshape((x.shape[-1],), name="flatten")(x)
     x = tf.keras.layers.Dense(2, name="logits")(x)
@@ -106,7 +124,7 @@ def build_model(
 
 
 def _elems(shape) -> int:
-    """非 batch 维度元素数之积（shape[0] 是 batch=None，跳过）。"""
+    """Product of the non-batch dimensions; shape[0] is the batch of None and is skipped."""
     n = 1
     for d in shape[1:]:
         if d is not None:
@@ -115,12 +133,13 @@ def _elems(shape) -> int:
 
 
 def activation_memory_report(model: tf.keras.Model) -> tuple[float, str]:
-    """逐层打印输出 feature map 的 int8 激活内存，返回 (峰值KB, 峰值层名)。"""
-    print(f"\n{'层名':<16}{'输出形状':<22}{'激活内存(KB)':>14}")
+    """Print the int8 activation memory of each layer's output feature map, and return
+    (peak KB, peak layer name)."""
+    print(f"\n{'layer':<16}{'output shape':<22}{'activation KB':>14}")
     print("-" * 52)
     peak_kb = 0.0
     peak_layer = ""
-    # 收集 (层名, 输出shape, 元素数) 供后面算并发占用。
+    # Collect (layer name, output shape, element count) for the concurrent-usage estimate below.
     seq: list[tuple[str, tuple, int]] = []
     for layer in model.layers:
         out_shape = tuple(layer.output.shape)
@@ -132,12 +151,12 @@ def activation_memory_report(model: tf.keras.Model) -> tuple[float, str]:
             peak_kb = kb
             peak_layer = layer.name
         print(f"{layer.name:<16}{str(out_shape):<22}{kb:>14.2f}")
-    # 标出峰值
+    # Mark the peak
     print("-" * 52)
-    print(f"单层输出峰值：{peak_kb:.2f} KB  @ {peak_layer}")
+    print(f"peak single-layer output: {peak_kb:.2f} KB at {peak_layer}")
 
-    # 参考：更接近 ESP32 TFLM tensor arena 的并发占用估计
-    # （顺序网络执行某层时，需同时持有该层输入+输出张量）。
+    # A closer proxy for the TFLM tensor arena on ESP32: while a sequential network executes
+    # one layer, it holds that layer's input and output tensors at the same time.
     concur_peak = 0.0
     concur_at = ""
     for (n_in, _, e_in), (n_out, _, e_out) in zip(seq, seq[1:]):
@@ -146,7 +165,7 @@ def activation_memory_report(model: tf.keras.Model) -> tuple[float, str]:
             concur_peak = kb
             concur_at = f"{n_in}→{n_out}"
     print(
-        f"参考(更接近 ESP32 arena，同层输入+输出并发)："
+        f"reference (closer to the ESP32 arena; input and output of one layer held together): "
         f"{concur_peak:.2f} KB  @ {concur_at}"
     )
     return peak_kb, peak_layer
@@ -154,31 +173,31 @@ def activation_memory_report(model: tf.keras.Model) -> tuple[float, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="守门员小 CNN 建模 + 激活内存核算。",
+        description="Build the gatekeeper CNN and account for activation memory.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--size", type=int, default=96, help="输入方形边长（像素）")
+    parser.add_argument("--size", type=int, default=96, help="input side length in pixels")
     args = parser.parse_args()
 
     model = build_model(args.size)
     model.summary()
 
-    print(f"\n权重参数量：{model.count_params():,}")
+    print(f"\nparameters: {model.count_params():,}")
 
     peak_kb, peak_layer = activation_memory_report(model)
 
-    # 硬关卡判定（任务规定的指标：单层输出 feature map 峰值）
-    print(f"\n激活内存预算：{ACT_MEM_BUDGET_KB} KB")
+    # Hard gate, on the specified metric: the peak single-layer output feature map
+    print(f"\nactivation memory budget: {ACT_MEM_BUDGET_KB} KB")
     if peak_kb > ACT_MEM_BUDGET_KB:
         print(
-            f"\n*** STOP：单层激活峰值 {peak_kb:.2f} KB @ {peak_layer} "
-            f"超过预算 {ACT_MEM_BUDGET_KB} KB。停止，不进入训练。***",
+            f"\n*** STOP: peak single-layer activation {peak_kb:.2f} KB at {peak_layer} "
+            f"exceeds the {ACT_MEM_BUDGET_KB} KB budget. Halting before training. ***",
             file=sys.stderr,
         )
         return 1
     print(
-        f"通过：单层激活峰值 {peak_kb:.2f} KB @ {peak_layer} "
-        f"≤ {ACT_MEM_BUDGET_KB} KB，预算内。"
+        f"Pass: peak single-layer activation {peak_kb:.2f} KB at {peak_layer} "
+        f"is within the {ACT_MEM_BUDGET_KB} KB budget."
     )
     return 0
 

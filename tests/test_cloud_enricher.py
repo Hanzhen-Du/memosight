@@ -1,7 +1,9 @@
-"""阶段二-A: 真 CloudEnricher 测试。
+"""Tests for the real CloudEnricher.
 
-- 解析逻辑 + 错误映射：用 fake client，**不真调 API**（省 token、可离线、可 CI）。
-- 集成测试：一条真调用，需 ANTHROPIC_API_KEY + 显式开关 MEMOSIGHT_LIVE_ENRICH=1，否则 skip。
+- Parsing and error mapping use a fake client and make no real API call, so they cost nothing,
+  run offline and work in CI.
+- One integration test makes a real call. It needs ANTHROPIC_API_KEY plus the explicit switch
+  MEMOSIGHT_LIVE_ENRICH=1, and skips otherwise.
 """
 
 import os
@@ -70,16 +72,16 @@ class TestParsing(unittest.TestCase):
 
     def test_parse_lowercase_dedupe_cap(self):
         out = _parse_tags('["A","a","B","c","d","e","f","g"]', max_tags=6)
-        self.assertEqual(out, ["a", "b", "c", "d", "e", "f"])  # 去重+小写+截断到6
+        self.assertEqual(out, ["a", "b", "c", "d", "e", "f"])  # deduplicated, lowercased, capped at 6
 
     def test_parse_invalid_json_returns_empty(self):
         self.assertEqual(_parse_tags("not json at all"), [])
 
     def test_parse_non_array_returns_empty(self):
-        self.assertEqual(_parse_tags('{"tag":"x"}'), [])  # 对象内无 list 值 → []
+        self.assertEqual(_parse_tags('{"tag":"x"}'), [])  # no list value in the object, so []
 
     def test_parse_dict_wrapped_array(self):
-        # json_object 模式：数组包在对象里 → 取第一个 list 值
+        # json_object mode wraps the array in an object, so the first list value is taken
         self.assertEqual(_parse_tags('{"tags":["meeting-notes","budget"]}'),
                          ["meeting-notes", "budget"])
 
@@ -93,10 +95,11 @@ class TestCloudEnricherWithFakeClient(unittest.TestCase):
         enr = CloudEnricher(client=client)
         tags = enr.enrich("Q3 roadmap budget review", {"trigger_confidence": 0.9})
         self.assertEqual(tags, ["meeting-notes", "q3-roadmap", "budget"])
-        self.assertFalse(any(t.startswith("mock:") for t in tags))  # 真标签无 mock: 前缀
+        self.assertFalse(any(t.startswith("mock:") for t in tags))  # real tags carry no mock: prefix
 
     def test_default_model_is_haiku(self):
-        # 决策锁定：默认模型 = claude-haiku-4-5（轻任务省成本）。可配置覆盖。
+        # Locked-in decision: the default model is claude-haiku-4-5, chosen to keep a light
+        # task cheap. It stays configurable.
         self.assertEqual(CloudEnricher().model, "claude-haiku-4-5")
 
     def test_sends_expected_model_and_max_tokens(self):
@@ -130,7 +133,8 @@ class TestCloudEnricherWithFakeClient(unittest.TestCase):
             CloudEnricher(client=client).enrich("t", {})
 
     def test_bad_model_id_raises_config_error(self):
-        # 例如误用不存在的 "claude-sonnet-5" → 404 NotFound → 配置错误（不入队）
+        # For example, using a model id that does not exist gives 404 NotFound, which is a
+        # configuration error and is not queued
         exc = anthropic.NotFoundError(
             message="model not found", response=httpx.Response(404, request=_req()), body=None
         )
@@ -141,12 +145,12 @@ class TestCloudEnricherWithFakeClient(unittest.TestCase):
     def test_missing_key_raises_config_error(self):
         with mock.patch("pipeline.enrich.cloud_enricher.get_anthropic_api_key", return_value=None):
             with self.assertRaises(EnricherConfigError):
-                CloudEnricher().enrich("t", {})  # 无注入 client、无密钥
+                CloudEnricher().enrich("t", {})  # no injected client and no key
 
 
 @unittest.skipUnless(
     os.environ.get("MEMOSIGHT_LIVE_ENRICH") == "1" and os.environ.get("ANTHROPIC_API_KEY"),
-    "需 MEMOSIGHT_LIVE_ENRICH=1 且有 ANTHROPIC_API_KEY 才跑真调用（省 token）",
+    "a real call needs MEMOSIGHT_LIVE_ENRICH=1 and ANTHROPIC_API_KEY; skipped to avoid cost",
 )
 class TestCloudEnricherLive(unittest.TestCase):
     def test_real_call_returns_tags(self):

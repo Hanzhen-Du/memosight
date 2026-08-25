@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
-"""数据准备流水线（降清 → 标签 → 切分）—— MemoSight 守门员训练数据打包工具。
+"""Data preparation pipeline: downscale, label, split. Packages raw images into gatekeeper
+training data.
 
-把 data/raw/ 下按目录分好类的原始图片，处理成守门员训练直接可用的形态：
+Takes the raw images filed by directory under data/raw/ and turns them into a form the
+gatekeeper can train on directly:
 
-  1. 降清：遍历三大类目录下所有图片（含子目录），转成 size×size 单通道灰度，
-     用区域插值（INTER_AREA）下采样避免摩尔纹，保存到 data/processed/。
-     保留原始相对目录结构，文件名追加原路径 hash 防重名。
-  2. 标签：直接用目录结构映射，不逐张标注。
-        positive/        → 标签 1（记）
-        negative_noise/  → 标签 0（不记，噪声文字）
-        negative_clean/  → 标签 0（不记，无文字）
-     产出 manifest.csv：每行 = 处理后图片相对路径 + 标签 + 原始大类来源 + 细分子类。
-  3. 切分：按 70/15/15 切 train/val/test，按「来源大类」分层抽样（stratified），
-     保证每个 split 里正负比例一致；固定随机种子可复现。
-     输出 train.csv / val.csv / test.csv。
+  1. Downscale. Walk every image under the three top-level class directories, including
+     subdirectories, convert to size x size single-channel greyscale, and downsample with area
+     interpolation (INTER_AREA) to avoid moire. Save into data/processed/, preserving the
+     original relative directory structure and appending a hash of the original path to the
+     filename to avoid collisions.
+  2. Label from the directory structure rather than per image:
+        positive/        label 1 (record)
+        negative_noise/  label 0 (do not record, text that is not a launch scene)
+        negative_clean/  label 0 (do not record, no text)
+     Produces manifest.csv, one row per processed image: relative path, label, top-level source
+     class, and subclass.
+  3. Split 70/15/15 into train, val and test, stratified by top-level source class so the
+     positive/negative ratio is consistent across splits. The random seed is fixed, so the
+     split is reproducible. Writes train.csv, val.csv and test.csv.
 
-只准备数据，不训练、不建模。
+This prepares data only. It does not train and does not build a model.
 
-依赖：opencv-python、numpy（见 requirements.txt）。仅用标准库写 CSV，不依赖 pandas。
+Dependencies: opencv-python and numpy (see requirements.txt). CSVs are written with the
+standard library, so pandas is not required.
 
-示例：
-  python3 scripts/prepare_dataset.py                  # 用默认参数实跑
-  python3 scripts/prepare_dataset.py --dry-run        # 只扫描打印统计，不写文件
-  python3 scripts/prepare_dataset.py --size 96 --seed 42
+Examples:
+  python3 scripts/prepare_dataset.py                  # run with defaults
+  python3 scripts/prepare_dataset.py --dry-run        # scan and print statistics only
 """
 
 from __future__ import annotations
@@ -37,39 +42,44 @@ from pathlib import Path
 
 import cv2
 
-# 目录大类 → (标签, 是否正例)。守门员只做二分类：positive=记=1，其余=不记=0。
+# Top-level directory to label. The gatekeeper is strictly binary: positive means record (1),
+# everything else means do not record (0).
 CLASS_LABELS: dict[str, int] = {
     "positive": 1,
     "negative_noise": 0,
     "negative_clean": 0,
 }
 
-# 接受的图片后缀（小写比较）。
+# Accepted image extensions, compared lowercase.
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
-# 切分比例，必须和为 1。test 用剩余量兜底，避免浮点误差丢样本。
+# Split ratios, which must sum to 1. test takes the remainder so floating-point error cannot
+# drop samples.
 SPLIT_RATIOS = {"train": 0.70, "val": 0.15, "test": 0.15}
 
-# manifest / 各 split CSV 的列。
+# Columns of the manifest and of each split CSV.
 CSV_FIELDS = ["path", "label", "source", "subclass", "split"]
 
 
 def find_images(input_root: Path) -> list[dict]:
-    """遍历三大类目录下所有图片（含子目录），返回样本记录列表。
+    """Walk every image under the three class directories, including subdirectories, and
+    return a list of sample records.
 
-    每条记录：{src(原图绝对路径), source(大类), subclass(子目录名), label}。
-    跳过不在 CLASS_LABELS 里的大类目录，并提醒。
+    Each record is {src: absolute path to the original, source: top-level class,
+    subclass: subdirectory name, label}. Class directories not present in CLASS_LABELS are
+    skipped with a warning.
     """
     samples: list[dict] = []
     for source, label in CLASS_LABELS.items():
         class_dir = input_root / source
         if not class_dir.is_dir():
-            print(f"[警告] 找不到大类目录，跳过：{class_dir}", file=sys.stderr)
+            print(f"[warning] class directory not found, skipping: {class_dir}", file=sys.stderr)
             continue
         for path in sorted(class_dir.rglob("*")):
             if not path.is_file() or path.suffix.lower() not in IMAGE_EXTS:
                 continue
-            # 子类 = 大类目录下的第一级子目录名；若图片直接放在大类根下，记为 "_root"。
+            # The subclass is the first-level subdirectory under the class directory. Images
+            # sitting directly in the class root are recorded as "_root".
             rel_parts = path.relative_to(class_dir).parts
             subclass = rel_parts[0] if len(rel_parts) > 1 else "_root"
             samples.append(
@@ -79,7 +89,8 @@ def find_images(input_root: Path) -> list[dict]:
 
 
 def processed_relpath(sample: dict, input_root: Path) -> Path:
-    """计算处理后图片相对 output_root 的路径：镜像原始相对结构 + 8位路径hash 防重名，统一存为 .png。"""
+    """Build the processed image's path relative to output_root: mirror the original relative
+    structure, append an 8-character path hash to avoid collisions, and always use .png."""
     rel = sample["src"].relative_to(input_root)
     digest = hashlib.sha1(str(rel).encode("utf-8")).hexdigest()[:8]
     return rel.with_name(f"{rel.stem}_{digest}.png")
@@ -88,10 +99,11 @@ def processed_relpath(sample: dict, input_root: Path) -> Path:
 def stratified_split(
     samples: list[dict], seed: int
 ) -> dict[str, list[dict]]:
-    """按「来源大类」分层抽样切 70/15/15。
+    """Split 70/15/15, stratified by top-level source class.
 
-    在每个大类内部独立按比例切分，再合并 —— 这样保证每个 split 里
-    三大类（进而正/负）的比例都与全集一致。test 取剩余，不丢样本。
+    Each class is split independently by ratio and the parts are then merged, which keeps the
+    proportion of the three classes, and therefore of positives and negatives, the same in each
+    split as in the whole set. test takes the remainder so no sample is dropped.
     """
     rng = random.Random(seed)
     buckets: dict[str, list[dict]] = defaultdict(list)
@@ -107,24 +119,25 @@ def stratified_split(
         n_val = int(n * SPLIT_RATIOS["val"])
         out["train"].extend(group[:n_train])
         out["val"].extend(group[n_train : n_train + n_val])
-        out["test"].extend(group[n_train + n_val :])  # 剩余全给 test
+        out["test"].extend(group[n_train + n_val :])  # everything left goes to test
     return out
 
 
 def print_stats(title: str, rows: list[dict]) -> None:
-    """打印一个集合的总数 / 正例 / 反例 / 正负比例。"""
+    """Print a set's total, positives, negatives and positive-to-negative ratio."""
     total = len(rows)
     pos = sum(1 for r in rows if int(r["label"]) == 1)
     neg = total - pos
     ratio = f"{pos / neg:.3f}" if neg else "∞"
-    print(f"  {title:<6} 共 {total:>4} | 正 {pos:>4} | 负 {neg:>4} | 正/负 = {ratio}")
+    print(f"  {title:<8} total {total:>4} | pos {pos:>4} | neg {neg:>4} | pos/neg = {ratio}")
 
 
 def write_image(sample: dict, dst: Path, size: int) -> bool:
-    """读图→灰度→INTER_AREA 降清到 size×size→写 PNG。读失败返回 False。"""
+    """Read, convert to greyscale, downscale to size x size with INTER_AREA, write PNG.
+    Returns False if the image cannot be read."""
     img = cv2.imread(str(sample["src"]), cv2.IMREAD_GRAYSCALE)
     if img is None:
-        print(f"[警告] 无法读取，跳过：{sample['src']}", file=sys.stderr)
+        print(f"[warning] unreadable, skipping: {sample['src']}", file=sys.stderr)
         return False
     resized = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -132,7 +145,7 @@ def write_image(sample: dict, dst: Path, size: int) -> bool:
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
-    """写一个 CSV（列见 CSV_FIELDS）。"""
+    """Write one CSV, with the columns in CSV_FIELDS."""
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         writer.writeheader()
@@ -142,17 +155,17 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="MemoSight 守门员数据准备：降清→标签→分层切分。",
+        description="Gatekeeper data preparation: downscale, label, stratified split.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--input-root", type=Path, default=Path("data/raw"))
     parser.add_argument("--output-root", type=Path, default=Path("data/processed"))
-    parser.add_argument("--size", type=int, default=96, help="输出方形边长（像素）")
-    parser.add_argument("--seed", type=int, default=42, help="切分随机种子")
+    parser.add_argument("--size", type=int, default=96, help="output side length in pixels")
+    parser.add_argument("--seed", type=int, default=42, help="random seed for the split")
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="只扫描和打印统计，不写任何文件",
+        help="scan and print statistics only; write nothing",
     )
     args = parser.parse_args()
 
@@ -160,42 +173,43 @@ def main() -> int:
     output_root: Path = args.output_root
 
     if not input_root.is_dir():
-        print(f"[错误] 输入根目录不存在：{input_root}", file=sys.stderr)
+        print(f"[error] input root does not exist: {input_root}", file=sys.stderr)
         return 1
 
-    # 1) 扫描 + 标签
+    # 1) scan and label
     samples = find_images(input_root)
     if not samples:
-        print(f"[错误] 在 {input_root} 下没扫到任何图片。", file=sys.stderr)
+        print(f"[error] no images found under {input_root}.", file=sys.stderr)
         return 1
 
-    # 预填每条记录的处理后相对路径（dry-run 也要，统计 manifest 用）。
+    # Precompute each record's processed relative path. A dry run needs it too, for the
+    # manifest statistics.
     for s in samples:
         s["path"] = str(processed_relpath(s, input_root)).replace("\\", "/")
 
-    print(f"扫描到 {len(samples)} 张图片，来自 {input_root}/")
+    print(f"found {len(samples)} images under {input_root}/")
     by_source = defaultdict(int)
     for s in samples:
         by_source[s["source"]] += 1
     for source in CLASS_LABELS:
-        print(f"  {source:<16} {by_source.get(source, 0):>4} 张 (label={CLASS_LABELS[source]})")
+        print(f"  {source:<16} {by_source.get(source, 0):>4} images (label={CLASS_LABELS[source]})")
 
-    # 3) 分层切分
+    # 3) stratified split
     splits = stratified_split(samples, args.seed)
     for split_name, rows in splits.items():
         for r in rows:
             r["split"] = split_name
 
-    mode = "DRY-RUN（不写文件）" if args.dry_run else "实跑"
-    print(f"\n=== 切分统计 [{mode}] | seed={args.seed} | 70/15/15 分层（按来源大类）===")
+    mode = "DRY RUN, nothing written" if args.dry_run else "live"
+    print(f"\n=== split statistics [{mode}] | seed={args.seed} | 70/15/15 stratified by source class ===")
     all_rows = splits["train"] + splits["val"] + splits["test"]
-    print_stats("全集", all_rows)
+    print_stats("all", all_rows)
     for split_name in ("train", "val", "test"):
         print_stats(split_name, splits[split_name])
 
-    # 2) + 写盘
+    # 2) and write to disk
     if not args.dry_run:
-        print(f"\n开始处理图片 → {output_root}/（{args.size}×{args.size} 灰度 PNG）…")
+        print(f"\nprocessing images into {output_root}/ ({args.size}x{args.size} greyscale PNG)...")
         written = 0
         failed = 0
         for s in all_rows:
@@ -204,29 +218,29 @@ def main() -> int:
                 written += 1
             else:
                 failed += 1
-        # manifest（全集）+ 三个 split CSV
+        # the full manifest plus the three split CSVs
         output_root.mkdir(parents=True, exist_ok=True)
         write_csv(output_root / "manifest.csv", all_rows)
         for split_name in ("train", "val", "test"):
             write_csv(output_root / f"{split_name}.csv", splits[split_name])
-        print(f"图片写盘完成：成功 {written}，失败 {failed}。")
+        print(f"images written: {written} succeeded, {failed} failed.")
         print(
-            f"已写出：{output_root}/manifest.csv、train.csv、val.csv、test.csv"
+            f"wrote {output_root}/manifest.csv, train.csv, val.csv, test.csv"
         )
         if failed:
             print(
-                f"[注意] 有 {failed} 张图读取失败已跳过，但仍在 CSV 里 —— "
-                f"训练前请按上面警告核查或重跑。",
+                f"[note] {failed} images failed to read and were skipped, but they are still "
+                f"listed in the CSVs. Check the warnings above or re-run before training.",
                 file=sys.stderr,
             )
 
-    # 4) 不平衡提醒
+    # 4) class imbalance note
     total_pos = sum(1 for s in samples if s["label"] == 1)
     total_neg = len(samples) - total_pos
     print(
-        f"\n[提醒] 当前两类不平衡：正 {total_pos} vs 负 {total_neg} "
-        f"（正/负 ≈ {total_pos / total_neg:.2f}）。"
-        f"训练阶段请用 class weight 处理，不要在这里重采样改变数据分布。"
+        f"\n[note] the classes are imbalanced: {total_pos} positive against {total_neg} "
+        f"negative (ratio about {total_pos / total_neg:.2f}). Handle this with class weights "
+        f"during training rather than resampling here, which would change the distribution."
     )
     return 0
 

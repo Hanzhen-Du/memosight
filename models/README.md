@@ -1,48 +1,77 @@
-# models/ — 守门员模型清单
+# models/ — gatekeeper model inventory
 
-模型权重文件（`*.keras`）按 `.gitignore` **不入库**（含 `archive/`）。
-复现契约 = 训练脚本 + `data/processed/manifest_dedup.csv` / `dedup_*.csv` + 固定 seed。
-本 README 记录"哪个是当前最佳、归档了什么"，是可追溯的清单。
+Weight files (`*.keras`) are not committed, per `.gitignore`, and neither is `archive/`. The
+reproducibility contract is training script + `data/processed/manifest_dedup.csv` and
+`dedup_*.csv` + a fixed seed.
 
-## 顶层模型（不同口径，不可直接比 F1——test 分布/边界不同）
+This file records which model is current and what has been archived, so the lineage stays
+traceable.
 
-- **`gatekeeper_task2_mvp.keras`** —（**当前推荐**，2026-06-25 提为顶层最佳）Task2 扩充负例修复
-  人像误报（covariate shift）。在**同一 held-out 探针**上 vs v4_mvp 的关键差异：
-  - **noscreen 探针 FP 砍半**：同部署阈值 0.55，51.1%→**21.7%**（int8，235 张）；
-    匹配召回 ~62% 处 v4 FP ~45% 而 task2 仅 30%——**"FP vs person+screen 召回"曲线上帕累托全程占优**。
-  - **诚实代价：5-seed test F1 0.757→0.734（−0.023）**、FN 0.230→0.290（test 集因补 558 负例而组成改变，
-    与 v4 非严格同口径）。这是"用 FP 换 FN"的再平衡，不粉饰。
-  - int8 全 TFLM 白名单(11 算子)、全 int8、32.4KB；ESP32 预算同 v4。
-  - **部署阈值未冻结**：见 `docs/threshold-tradeoff.md` 三阈值对照表（FN/FP/探针 trade-off），
-    待定。person+screen 召回经扩充探针（181 张，CI ±7pp）实测，绝对值低于早期 51 张小探针估计——
-    详见该表 §1 注与 §3 帕累托对比。
-- `gatekeeper_v4_mvp.keras` —（Task2 前的最佳）阶段 3.4-B `v4_narrow`，收窄回 MVP 边界 1752。
-  5-seed F1 **0.757±0.012**、FN 0.230；单 seed test@0.55 F1 0.783。
-  剔除了手机app/TV菜单/商品包装等歧义硬负例（见 `docs/label-scope.md` 的边界定义）。**人像误报偏高**
-  （noscreen 探针 FP @0.55 = 51.1%）是被 task2 修复的主要缺陷。
-- `gatekeeper_v2_best.keras` — 阶段 3.3 `p33_screen`，原 1518 清晰分布。test F1 0.760（@0.45）。
-- `gatekeeper_v3_robust.keras` — 阶段 3.4 `v3_screen`，宽边界 1950（含歧义硬负例）。
-  test F1 0.736（@0.4）；聚合 F1 被歧义负例拖低，留作"宽边界鲁棒性"参考。
+## Top-level models
 
-三者 ESP32 预算均达标（激活 72KB / int8 24.3KB / 全 TFLM 白名单）。
-指标与判定见 `docs/gatekeeper-training-log.md`。**是否进 Task2 硬件实测待定。**
+These were measured under different label definitions and on different test distributions, so
+their F1 values are not directly comparable with each other.
 
-> ⚠️ **修正（2026-06-18，导出实测）**：上行"全 TFLM 白名单"原为 `model.py` 的**静态算子核算**，
-> 直到 2026-06-18 才首次真实导出 .tflite 验证。结论需加限定：**仅当以固定 batch=1 导出时白名单成立**；
-> 默认动态 batch(-1) 导出会引入 SHAPE/STRIDED_SLICE/PACK 三个非白名单算子（flatten 的动态 Reshape 所致）。
-> 导出脚本 `scripts/export_tflite.py` 已固定 `batch_shape=(1,96,96,1)`。`gatekeeper_v4_mvp_int8.tflite` 实测：
-> 9 个算子全部白名单、全 int8、权重数据缓冲 24.4KB（与 24.3KB 估算吻合）、量化近无损（ΔF1 ±0.007 内）。
-> .tflite 同 .keras 一样按 `.gitignore` 不入库，部署需手动传到派/板。
-> **仍未做**：ESP32 真机验证（tensor arena 实占 ≤ 片上 SRAM、TFLM kernel 数值一致性、实测延迟/功耗）——见 TODO。
+**`gatekeeper_task2_mvp.keras`** — current recommendation, promoted 2026-06-25. Task 2 expanded
+the negatives to fix person-driven false triggers (covariate shift). Against v4_mvp on the same
+held-out probe:
 
-## 归档（`models/archive/`，一次性实验，不删只移）
+- No-screen probe FP more than halved: at the same deployment threshold of 0.55, 51.1% down to
+  21.7% (int8, 235 images). At matched recall of about 62%, v4 sits near 45% FP while task2 is
+  at 30%, so task2 Pareto-dominates along the whole FP versus person-plus-screen recall curve.
+- The honest cost: 5-seed test F1 0.757 to 0.734 (−0.023) and FN 0.230 to 0.290. The test set
+  changed composition when 558 negatives were added, so it is not strictly the same measurement
+  as v4's. This is a rebalancing that trades FP for FN, and it is not being dressed up as
+  anything else.
+- int8: all 11 operators on the TFLite Micro whitelist, fully int8, 32.4 KB. Same ESP32 budget
+  as v4.
+- The deployment threshold is not frozen. See the three-threshold table in
+  `docs/threshold-tradeoff.md` for the FN, FP and probe trade-off; the choice is still open.
+  Person-plus-screen recall was measured on the expanded probe (181 images, CI ±7pp) and its
+  absolute value is lower than the earlier estimate from the 51-image probe. See the note in
+  section 1 and the Pareto comparison in section 3 of that document.
 
-| 文件 | 来源 |
+**`gatekeeper_v4_mvp.keras`** — the best model before task2. Phase 3.4-B `v4_narrow`, narrowed
+back to the MVP boundary at 1752 images. 5-seed F1 0.757 ± 0.012, FN 0.230; single-seed test F1
+0.783 at threshold 0.55. Ambiguous hard negatives such as phone apps, TV menus and product
+packaging were removed (see `docs/label-scope.md`). Its main weakness, the one task2 fixed, is
+high person-driven false triggering: no-screen probe FP of 51.1% at threshold 0.55.
+
+**`gatekeeper_v2_best.keras`** — phase 3.3 `p33_screen`, on the original clean distribution of
+1518 images. Test F1 0.760 at threshold 0.45.
+
+**`gatekeeper_v3_robust.keras`** — phase 3.4 `v3_screen`, wide boundary at 1950 images including
+the ambiguous hard negatives. Test F1 0.736 at threshold 0.4. Its aggregate F1 is dragged down
+by the ambiguous negatives; kept as a reference point for wide-boundary robustness.
+
+All of these meet the ESP32 budget: 72 KB activations, 24.3 KB int8 weights, all operators
+whitelisted. Metrics and verdicts are in `docs/gatekeeper-training-log.md`. Whether to proceed
+to task2 hardware measurement is still to be decided.
+
+**Correction, 2026-06-18, after a real export.** The "all operators whitelisted" claim above
+originally came from a static operator count in `model.py`; it was not verified by an actual
+`.tflite` export until 2026-06-18. The claim needs a qualifier: the whitelist holds only when
+the model is exported with a fixed batch of 1. The default dynamic batch (-1) introduces three
+non-whitelisted operators — SHAPE, STRIDED_SLICE and PACK — through flatten's dynamic reshape.
+The export script `scripts/export_tflite.py` now pins `batch_shape=(1,96,96,1)`. Measured on
+`gatekeeper_v4_mvp_int8.tflite`: 9 operators, all whitelisted, fully int8, weight data buffer
+24.4 KB (agreeing with the 24.3 KB estimate), quantisation near-lossless at ΔF1 within 0.007.
+
+Like `.keras` files, `.tflite` files are not committed and have to be copied to the device
+manually. Still outstanding: ESP32 on-device verification — actual tensor arena occupancy
+against on-chip SRAM, TFLM kernel numerical agreement, and measured latency and power.
+
+## Archive
+
+`models/archive/` holds one-off experiments. Nothing is deleted, only moved.
+
+| File | Origin |
 |---|---|
-| gatekeeper_v1 / r1 / r2 | 第一版（泄漏数据上训练，已作废） |
-| gatekeeper_dedup_v1 | 阶段 2 dedup 基线（test F1 0.659@0.5） |
-| gatekeeper_p32_posmult15 / posmult20 / focal | 阶段 3.2 class weight/focal（未超 3.1） |
-| gatekeeper_p33_screen / screen_pm15 / screen_focal | 阶段 3.3 增强实验（screen 为最佳，已提为 v2_best） |
-| gatekeeper_smoke / timing_probe | 流水线烟测/计时探针 |
+| gatekeeper_v1 / r1 / r2 | First version, trained on leaked data. Withdrawn |
+| gatekeeper_dedup_v1 | Phase 2 dedup baseline (test F1 0.659 at 0.5) |
+| gatekeeper_p32_posmult15 / posmult20 / focal | Phase 3.2 class weight and focal loss. Did not beat 3.1 |
+| gatekeeper_p33_screen / screen_pm15 / screen_focal | Phase 3.3 augmentation experiments. `screen` was best and was promoted to v2_best |
+| gatekeeper_smoke / timing_probe | Pipeline smoke test and timing probe |
 
-> 注：阶段 3.4 补数据后将训练 v3，若更优则提为新顶层最佳、本表更新、v2 归档。
+When the phase 3.4 data expansion trains v3, if it is better it becomes the new top-level model,
+this table is updated, and v2 is archived.

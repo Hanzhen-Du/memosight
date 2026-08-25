@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""笔记本端接收器 —— 收 cascade.py --push 推回的高清帧。
+"""Laptop-side receiver for the full-resolution frames pushed back by cascade.py --push.
 
-与 cascade.push_frame 配对：监听 HTTP，把 POST /upload?name=<file> 的 body(JPEG)
-落盘到 --outdir。纯 stdlib(http.server)，**零新依赖**。
+Pairs with cascade.push_frame: listens over HTTP and writes the JPEG body of
+POST /upload?name=<file> into --outdir. Pure stdlib (http.server), so no new dependency.
 
-在**笔记本**上跑（不是 Pi）：
+Run this on the laptop, not the Pi:
   python3 hardware/receiver_laptop.py --outdir ~/memosight_received --port 8000
-然后 Pi 上：
-  python3 hardware/cascade.py --push --host <笔记本IP> --port 8000
+Then on the Pi:
+  python3 hardware/cascade.py --push --host <laptop ip> --port 8000
 
-安全提示：这是个极简明文接收器，**只在可信局域网用**，别暴露到公网。
+Security note: this is a minimal plaintext receiver. Use it on a trusted local network only
+and never expose it to the internet.
 """
 
 from __future__ import annotations
@@ -22,12 +23,12 @@ from urllib.parse import parse_qs, urlparse
 
 def make_handler(outdir: Path):
     class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):  # noqa: N802 (http.server 约定大写)
+        def do_POST(self):  # noqa: N802 (http.server requires this capitalisation)
             parsed = urlparse(self.path)
             if parsed.path != "/upload":
                 self.send_error(404, "only POST /upload")
                 return
-            # 文件名净化：只取 basename，挡路径穿越。
+            # Sanitise the filename: take the basename only, to block path traversal.
             qs = parse_qs(parsed.query)
             raw = qs.get("name", ["frame.jpg"])[0]
             name = Path(raw).name or "frame.jpg"
@@ -41,7 +42,7 @@ def make_handler(outdir: Path):
             self.wfile.write(b"ok")
             print(f"received {name} ({len(data)} bytes) → {outdir / name}")
 
-        def log_message(self, *a):  # 静音默认每请求日志，自己打更干净的
+        def log_message(self, *a):  # silence the default per-request log; ours is cleaner
             pass
 
     return Handler
@@ -49,22 +50,22 @@ def make_handler(outdir: Path):
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="笔记本端高清帧接收器（配 cascade.py --push）。",
+        description="Laptop-side receiver for full-resolution frames, paired with cascade.py --push.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     ap.add_argument("--outdir", type=Path, default=Path.home() / "memosight_received")
-    ap.add_argument("--host", type=str, default="0.0.0.0", help="监听地址")
+    ap.add_argument("--host", type=str, default="0.0.0.0", help="address to listen on")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     server = ThreadingHTTPServer((args.host, args.port), make_handler(args.outdir))
-    print(f"接收器监听 http://{args.host}:{args.port}/upload → 存到 {args.outdir}")
-    print("Ctrl-C 退出。")
+    print(f"receiver listening on http://{args.host}:{args.port}/upload, saving to {args.outdir}")
+    print("Ctrl-C to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n停止。")
+        print("\nstopped.")
     finally:
         server.server_close()
     return 0

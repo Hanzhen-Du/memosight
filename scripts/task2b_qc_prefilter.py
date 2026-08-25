@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
-"""Task2b 阶段二 · QC 预筛：把"疑似含可读文字屏幕"的新负例挑出来供人眼复核（不删任何图）。
+"""Task 2b, phase two. QC pre-filter: surface the new negatives that may contain a readable
+text screen, for manual review. It deletes nothing.
 
-动机：task2b 新负例（室内办公/会议/居家 + 屏状表面）极易混入含可读屏幕/白板/PPT/代码屏文字的图
-（=正类），若误标为负例会污染负类。本脚本用启发式给每张图打"文字屏疑似度"并排序，产出 shortlist
-（CSV + 拼图）供用户白天重点人眼复核。**只标注、只排序、不自动删除任何图**（删除决定权在用户）。
+Motivation: the new task 2b negatives (indoor offices, meeting rooms and homes with screen-like
+surfaces) very easily include images with readable screen, whiteboard, slide or code-screen
+text, which would make them positives. Mislabelling those as negatives would contaminate the
+negative class. This script scores each image heuristically for "looks like a text screen" and
+sorts them, producing a shortlist as a CSV plus a montage for focused manual review. It only
+labels and ranks; it never deletes anything. Deletion is a human decision.
 
-启发式（cv2，单图先 resize≤256 再处理，守内存护栏）：
-  - rect_area：最大「亮四边形」面积占比（屏/白板/窗/画框等屏状区域，越大越可疑）。
-  - text_regions：MSER 检到的「类字形」连通域数（小尺寸+合理长宽比），文字密集→数值高。经典文本区域检测，
-    对纹理/图案会误报，故仅作排序信号、不作判据。
-  - suspicion = text_regions 归一化 × (0.5 + 0.5·有亮矩形)：文字多 *且* 有屏状区域 → 最可疑。
-排序降序，flagged = suspicion ≥ 分位阈（默认 70 分位，约标出最可疑 30%）。
-产出：docs/results/task2b_results/qc_text_screen_suspects.csv + 一张/多张拼图（每格标 文件名+text/rect）。
+Heuristics, all in cv2, resizing each image to at most 256 first to respect the memory limits:
+  - rect_area: the largest bright quadrilateral as a fraction of the frame (screen, whiteboard,
+    window, picture frame and similar screen-like regions). Larger is more suspicious.
+  - text_regions: the number of glyph-like connected components found by MSER, filtered to
+    small size and a reasonable aspect ratio. Dense text scores high. This is classic text
+    region detection and it false-fires on texture and patterns, so it is a ranking signal
+    only, never evidence.
+  - suspicion = normalised text_regions x (0.5 + 0.5 x has a bright rectangle). Plenty of text
+    AND a screen-like region is the most suspicious combination.
 
-⚠️ 这是"宁可多标、不可漏标"的粗筛：flagged 不等于"含文字屏"，未 flagged 也不保证干净。
-最终判定 100% 由用户人眼完成。
+Sorted descending, with flagged = suspicion at or above a percentile threshold, defaulting to
+the 70th percentile, which flags roughly the most suspicious 30%.
+
+Output: docs/results/task2b_results/qc_text_screen_suspects.csv plus one or more montages, each
+cell labelled with the filename and its text and rect scores.
+
+This is a deliberately over-inclusive filter. Flagged does not mean the image contains a text
+screen, and not being flagged does not guarantee it is clean. The final judgement is entirely
+manual.
+
 """
 from __future__ import annotations
 
@@ -26,7 +40,7 @@ import cv2
 import numpy as np
 
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
-DET = 256   # 检测分辨率上限
+DET = 256   # maximum detection resolution
 _MSER = cv2.MSER_create()
 _MSER.setMinArea(10)
 _MSER.setMaxArea(4000)
@@ -48,7 +62,8 @@ def resize_max(gray: np.ndarray, m: int) -> np.ndarray:
 
 
 def bright_rect_area(g: np.ndarray) -> float:
-    """最大亮四边形面积占比（屏/白板/窗/框等屏状区域），无则 0。"""
+    """Largest bright quadrilateral as a fraction of the frame: screens, whiteboards, windows,
+    frames and similar screen-like regions. 0 if there is none."""
     h, w = g.shape[:2]
     area = h * w
     med = float(np.median(g))
@@ -66,7 +81,8 @@ def bright_rect_area(g: np.ndarray) -> float:
 
 
 def text_region_count(g: np.ndarray) -> int:
-    """MSER 类字形连通域数：小尺寸 + 合理长宽比 + 非极端细长。文字密集→高。"""
+    """Count of glyph-like MSER connected components: small, with a reasonable aspect ratio and
+    not extremely elongated. Dense text scores high."""
     regions, _ = _MSER.detectRegions(g)
     n = 0
     h, w = g.shape[:2]
@@ -82,15 +98,16 @@ def text_region_count(g: np.ndarray) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Task2b 文字屏疑似度 QC 预筛（不删图）。")
+    ap = argparse.ArgumentParser(description="Task 2b QC pre-filter scoring how likely an image contains "
+                                                "a text screen. Deletes nothing.")
     ap.add_argument("--dir", type=Path, action="append", required=True,
-                    help="要扫描的目录（可多次）")
+                    help="directory to scan; may be repeated")
     ap.add_argument("--out-csv", type=Path,
                     default=Path("docs/results/task2b_results/qc_text_screen_suspects.csv"))
     ap.add_argument("--montage-dir", type=Path,
                     default=Path("docs/results/task2b_results"))
     ap.add_argument("--montage-top", type=int, default=48)
-    ap.add_argument("--pct", type=float, default=70.0, help="flagged 分位阈")
+    ap.add_argument("--pct", type=float, default=70.0, help="percentile threshold above which an image is flagged")
     args = ap.parse_args()
 
     imgs = collect(args.dir)
@@ -107,7 +124,7 @@ def main() -> int:
                      "brightness": round(float(g.mean())/255.0, 3)})
 
     if not rows:
-        print("[qc] 无图可扫")
+        print("[qc] no images to scan")
         return 0
     tmax = max(r["text_regions"] for r in rows) or 1
     for r in rows:
@@ -125,7 +142,7 @@ def main() -> int:
         w.writeheader()
         w.writerows(rows)
 
-    # 拼图：疑似度最高的 top-N（每格标 text/rect）
+    # Montage of the top-N most suspicious, each cell labelled with its text and rect scores
     top = [r for r in rows if r["flagged"]][:args.montage_top]
     if top:
         thumbs = []
@@ -146,10 +163,11 @@ def main() -> int:
             grid[rr*160:(rr+1)*160, cc*160:(cc+1)*160] = t
         mp = args.montage_dir / "qc_text_screen_suspects_montage.png"
         cv2.imwrite(str(mp), grid)
-        print(f"[qc] 拼图 → {mp}（top {len(thumbs)} 疑似）")
+        print(f"[qc] montage -> {mp} (top {len(thumbs)} most suspicious)")
 
-    print(f"[qc] 扫描 {len(rows)} 张，flagged 疑似含文字屏 {n_flag} 张（分位阈 {thr:.3f}）→ {args.out_csv}")
-    print(f"[qc] ⚠️ 仅供人眼复核，未删除任何图。")
+    print(f"[qc] scanned {len(rows)} images, flagged {n_flag} as possibly containing a text screen "
+          f"(percentile threshold {thr:.3f}) -> {args.out_csv}")
+    print("[qc] For manual review only. No images were deleted.")
     return 0
 
 

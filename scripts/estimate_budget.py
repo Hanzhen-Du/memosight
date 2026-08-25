@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
-"""Task1 候选预算估算 —— 训练前先算 参数量 / 峰值激活 / int8权重 / 算子，超标直接跳过不训。
+"""Budget estimation for task 1 candidates: compute parameter count, peak activation, int8
+weight size and operator set before training, and skip anything over budget without training it.
 
-ESP32 硬约束（淘汰线）：峰值激活 < 256KB · int8 权重 < 100KB · 仅 TFLM 白名单算子。
-本脚本对一组候选 build_model 配置：
-  - 逐层算 int8 激活（H×W×C 字节）：报告 单层峰值 + 并发峰值(同层输入+输出，更接近 TFLM arena)。
-  - int8 权重估算 = count_params×1B（与 export_tflite.py 同口径；基线 24874→24.3KB 实测吻合）。
-  - 静态算子核对：build_model 只用 Conv2D/BN(折叠)/ReLU/MaxPool/AveragePool/Reshape/Dense/Softmax，
-    全在 TFLM 白名单内；真实白名单仍以 export_tflite.py 实测 .tflite 为准（task2 踩过动态算子坑）。
-  - 给出 PASS / SKIP（任一预算超标即 SKIP，不进入训练）。
+Hard ESP32 constraints, which are the elimination line: peak activation under 256 KB, int8
+weights under 100 KB, and only TFLite Micro whitelisted operators.
 
-不训练、不导出，纯静态核算。依赖：tensorflow。
+For each candidate build_model configuration this script:
+  - computes int8 activation per layer (H x W x C bytes) and reports both the single-layer peak
+    and the concurrent peak (one layer's input plus output, which is closer to the TFLM arena);
+  - estimates int8 weights as count_params x 1 byte, the same measure export_tflite.py uses. The
+    baseline's 24,874 parameters give 24.3 KB, which matched the real export;
+  - checks the operator set statically: build_model uses only Conv2D, BatchNorm (folded), ReLU,
+    MaxPool, AveragePool, Reshape, Dense and Softmax, all whitelisted. The authoritative check
+    is still the real .tflite measured by export_tflite.py, since task 2 was caught out by
+    dynamic operators;
+  - prints PASS or SKIP. Any budget exceeded means SKIP and the candidate is not trained.
 
-示例：.venv/bin/python scripts/estimate_budget.py
+It neither trains nor exports; this is purely static accounting. Depends on tensorflow.
+
+Example: .venv/bin/python scripts/estimate_budget.py
+
 """
 
 from __future__ import annotations
@@ -26,18 +34,20 @@ ACT_BUDGET_KB = 256
 W_BUDGET_KB = 100
 BYTES_INT8 = 1
 
-# 候选清单：(标签, 描述, channels, convs_per_stage)
+# Candidates: (tag, description, channels, convs_per_stage)
 CANDIDATES = [
-    ("baseline", "基线 task2_mvp 架构", (8, 16, 32, 64), 1),
-    ("A_wide_late", "晚期加宽通道(早期不动→激活廉价)", (8, 16, 64, 128), 1),
-    ("B_deep_stack", "每 stage 堆 2 个 Conv(全程加深)", (8, 16, 32, 64), 2),
-    ("C_wide_uniform", "整体加宽(含早期 block1→16,吃激活)", (16, 32, 64, 64), 1),
-    ("D_five_stage", "加一个 stage(更深下采样+抽象)", (8, 16, 32, 64, 96), 1),
-    ("E_combo", "晚期加宽+晚期加深(综合,逼近权重上限)", (8, 16, 48, 64), (1, 1, 2, 2)),
+    ("baseline", "baseline task2_mvp architecture", (8, 16, 32, 64), 1),
+    ("A_wide_late", "widen late channels; early stages untouched, so activations stay cheap", (8, 16, 64, 128), 1),
+    ("B_deep_stack", "two Convs per stage, deeper throughout", (8, 16, 32, 64), 2),
+    ("C_wide_uniform", "widen uniformly, including block1 to 16, which costs activation memory", (16, 32, 64, 64), 1),
+    ("D_five_stage", "one more stage, deeper downsampling and abstraction", (8, 16, 32, 64, 96), 1),
+    ("E_combo", "widen and deepen late, combined; approaches the weight ceiling", (8, 16, 48, 64), (1, 1, 2, 2)),
 ]
 
-# int8 .tflite 折叠后仍占独立 arena 张量的层类型：BatchNorm 折进 Conv、ReLU 融合为 Conv 的
-# fused activation，均不留独立张量。故激活核算只数下列"产张量"层 + 输入。
+# Layer types that still occupy their own arena tensor after int8 .tflite folding. BatchNorm
+# folds into Conv and ReLU becomes Conv's fused activation, so neither leaves a separate
+# tensor. Activation accounting therefore counts only the tensor-producing layers below, plus
+# the input.
 _TENSOR_LAYER_TYPES = (
     tf.keras.layers.InputLayer,
     tf.keras.layers.Conv2D,
@@ -58,7 +68,8 @@ def _elems(shape) -> int:
 
 
 def analyze(model: tf.keras.Model) -> dict:
-    # 折叠后图（BN/ReLU 不留独立张量）的"产张量"层序列——这才是 ESP32 TFLM arena 实际持有的张量。
+    # The sequence of tensor-producing layers in the folded graph, where BN and ReLU leave no
+    # separate tensor. These are the tensors the ESP32 TFLM arena actually holds.
     seq = [(l.name, tuple(l.output.shape), _elems(l.output.shape))
            for l in model.layers if isinstance(l, _TENSOR_LAYER_TYPES)]
     single_peak_kb, single_at = 0.0, ""
@@ -75,9 +86,10 @@ def analyze(model: tf.keras.Model) -> dict:
     final_spatial = None
     for name, shp, _ in seq:
         if name == "gap_avgpool":
-            # gap 输入是前一层；取 flatten 前最后 conv/pool 的空间
+            # gap's input is the previous layer, so take the spatial size of the last conv or
+            # pool before flatten
             pass
-    # 末端进入 gap 前的空间维：找 gap_avgpool 的输入形状
+    # Spatial dimension entering gap at the tail: find gap_avgpool's input shape
     gap = next(l for l in model.layers if l.name == "gap_avgpool")
     in_hw = int(gap.input.shape[1])
     return {
@@ -101,13 +113,13 @@ def main() -> int:
         act_peak = max(a["single_peak_kb"], a["concur_peak_kb"])
         act_ok = a["concur_peak_kb"] < ACT_BUDGET_KB
         w_ok = a["int8_weight_kb"] < W_BUDGET_KB
-        verdict = "PASS" if (act_ok and w_ok) else "SKIP(超预算)"
+        verdict = "PASS" if (act_ok and w_ok) else "SKIP (over budget)"
         rows.append({"tag": tag, "desc": desc, "channels": list(channels),
                      "convs_per_stage": convs if isinstance(convs, int) else list(convs),
                      **a, "act_peak_kb": act_peak, "verdict": verdict})
 
-    print(f"{'候选':<16}{'channels':<22}{'conv/stg':<10}{'参数量':>9}"
-          f"{'int8权重KB':>11}{'单层峰KB':>10}{'并发峰KB':>10}{'结论':>14}")
+    print(f"{'candidate':<16}{'channels':<22}{'conv/stg':<10}{'params':>9}"
+          f"{'int8 KB':>11}{'peak KB':>10}{'concur KB':>10}{'verdict':>18}")
     print("-" * 104)
     for r in rows:
         cps = r["convs_per_stage"]
@@ -115,11 +127,13 @@ def main() -> int:
               f"{r['int8_weight_kb']:>11}{r['single_peak_kb']:>10}{r['concur_peak_kb']:>10}"
               f"{r['verdict']:>14}")
     print("-" * 104)
-    print(f"预算：并发激活 < {ACT_BUDGET_KB}KB · int8权重 < {W_BUDGET_KB}KB · 仅TFLM白名单")
-    print("（并发峰=同层输入+输出，更接近 ESP32 TFLM tensor arena 实占；单层峰为参考）")
+    print(f"budget: concurrent activation < {ACT_BUDGET_KB} KB, int8 weights < {W_BUDGET_KB} KB, "
+          "TFLM whitelist only")
+    print("concurrent peak is one layer's input plus output, which is closer to what the ESP32 "
+          "TFLM tensor arena actually holds; the single-layer peak is for reference")
     base = rows[0]
-    print(f"\n基线参照：参数 {base['params']:,} / int8权重 {base['int8_weight_kb']}KB / "
-          f"并发激活 {base['concur_peak_kb']}KB @ {base['concur_at']}")
+    print(f"\nbaseline reference: {base['params']:,} params, {base['int8_weight_kb']} KB int8 "
+          f"weights, {base['concur_peak_kb']} KB concurrent activation at {base['concur_at']}")
     print("\nBUDGET_JSON " + json.dumps(rows, ensure_ascii=False))
     return 0
 

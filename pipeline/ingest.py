@@ -1,12 +1,15 @@
-"""断网待处理队列的核心编排。
+"""Orchestration of the offline pending queue.
 
-三条路径（用可切换的 is_online() mock 测试）：
-1. 联网      → transport.upload(payload) 生成 tags → 完整 memory card → status=done 存库。
-2. 断网      → {ocr_text + 元数据} 存 pending（tags 暂空）。
-3. 恢复联网  → 批量取 pending → 逐条 upload 补 tags → 回填 → status=done，填 enriched_at。
+Three paths, tested with the switchable is_online() mock:
+1. Online:   transport.upload(payload) generates tags, producing a complete memory card stored
+             with status=done.
+2. Offline:  ocr_text plus metadata is stored as pending, with tags left empty.
+3. Recovery: fetch the pending rows in bulk, upload each to obtain tags, backfill them, set
+             status=done and fill in enriched_at.
 
-不做规则降级：断网时绝不用本地规则伪造 tags，只入队等待真正（本阶段 mock）的云端。
-云端调用失败（EnricherError）等价于"这条先留在 pending"。
+There is no rule-based fallback. When offline, tags are never fabricated from local rules; the
+card simply waits in the queue for the real cloud call, mocked in this phase. A failed cloud
+call (EnricherError) means the same thing as offline: this one stays pending.
 """
 
 from __future__ import annotations
@@ -31,14 +34,15 @@ class IngestService:
         self.transport = transport
         self.connectivity = connectivity
 
-    # ---- 路径 1 & 2：接收一个 payload ----
+    # ---- paths 1 and 2: accept one payload ----
     def ingest(self, payload: Payload) -> MemoryCard:
-        """联网直存(done) / 断网入队(pending)。云端失败也回退入队。"""
+        """Store directly as done when online, queue as pending when offline. A cloud failure
+        also falls back to queuing."""
         if self.connectivity.is_online():
             try:
-                card = self.transport.upload(payload)   # 已是 done 态
+                card = self.transport.upload(payload)   # already in the done state
             except EnricherError:
-                return self._queue(payload)             # 云端挂了 → 入队
+                return self._queue(payload)             # cloud failed, so queue it
             self.store.insert(card)
             return card
         return self._queue(payload)
@@ -55,9 +59,9 @@ class IngestService:
         self.store.insert(card)
         return card
 
-    # ---- 路径 3：恢复联网后批量补传 ----
+    # ---- path 3: bulk backfill once connectivity returns ----
     def process_pending(self) -> list[MemoryCard]:
-        """把 pending 队列逐条补 tags 回填。断网时直接返回空。"""
+        """Backfill tags for each row in the pending queue. Returns empty when offline."""
         if not self.connectivity.is_online():
             return []
         completed: list[MemoryCard] = []
@@ -71,7 +75,7 @@ class IngestService:
             try:
                 enriched = self.transport.upload(payload)
             except EnricherError:
-                continue  # 这条留在 pending，下次再试
+                continue  # leave this one pending and try again next time
             updated = self.store.enrich_card(card.id, enriched.tags or [])
             completed.append(updated)
         return completed

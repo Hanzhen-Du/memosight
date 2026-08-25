@@ -1,7 +1,9 @@
-"""VisionEnricher 测试。
+"""Tests for VisionEnricher.
 
-- 解析 + 错误映射 + 图片缩放：fake Anthropic client，**不真调 API**（省钱、可离线、可 CI）。
-- 集成测试：一条真多模态调用，需 ANTHROPIC_API_KEY + MEMOSIGHT_LIVE_VISION=1，否则 skip。
+- Parsing, error mapping and image scaling use a fake Anthropic client and make no real API
+  call, so they cost nothing, run offline and work in CI.
+- One integration test makes a real multimodal call. It needs ANTHROPIC_API_KEY plus
+  MEMOSIGHT_LIVE_VISION=1, and skips otherwise.
 """
 
 import json
@@ -58,7 +60,7 @@ class _FakeMessages:
 
 
 class _FakeClient:
-    """伪装 anthropic.Anthropic：只暴露 client.messages.create。"""
+    """Stands in for anthropic.Anthropic, exposing only client.messages.create."""
 
     def __init__(self, resp=None, exc=None):
         self.messages = _FakeMessages(resp=resp, exc=exc)
@@ -80,7 +82,7 @@ def _write_img(path: Path, w: int, h: int) -> Path:
 
 GOOD_JSON = json.dumps({
     "description": "A lecture slide about neural networks.",
-    "tags": ["Slides", "neural-networks", "lecture", "slides"],  # 含大写 + 重复
+    "tags": ["Slides", "neural-networks", "lecture", "slides"],  # mixed case plus a duplicate
     "extracted_text": "Neural Networks\nBackpropagation",
 })
 
@@ -92,7 +94,7 @@ class TestResize(unittest.TestCase):
             b64, nbytes = resize_and_encode(p)
             self.assertGreater(len(b64), 0)
             self.assertGreater(nbytes, 0)
-            # 解回来确认长边确实 ≤ 1024
+            # Decode it back and confirm the longest side really is at most 1024
             import base64 as b64mod
             arr = np.frombuffer(b64mod.b64decode(b64), dtype=np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -117,7 +119,7 @@ class TestParse(unittest.TestCase):
         ok, desc, tags, text = parse_vision_output(GOOD_JSON)
         self.assertTrue(ok)
         self.assertIn("neural networks", desc.lower())
-        self.assertEqual(tags, ["slides", "neural-networks", "lecture"])  # 小写 + 去重
+        self.assertEqual(tags, ["slides", "neural-networks", "lecture"])  # lowercased and deduplicated
         self.assertIn("Backpropagation", text)
 
     def test_code_fence_stripped(self):
@@ -177,11 +179,12 @@ class TestEnrichImage(unittest.TestCase):
         self.assertEqual(card.tags, ["slides", "neural-networks", "lecture"])
         self.assertEqual(card.usage, {"input_tokens": 100, "output_tokens": 50})
         self.assertGreater(card.image_bytes_sent, 0)
-        # 成本 = 100/1e6*3 + 50/1e6*15
+        # cost = 100/1e6*3 + 50/1e6*15
         self.assertAlmostEqual(card.cost_usd(), 100 / 1e6 * 3 + 50 / 1e6 * 15)
 
     def test_request_shape(self):
-        """确认发出去的确实是 image block + text block，且 model/max_tokens 正确。"""
+        """Confirm what is sent really is an image block plus a text block, with the correct
+        model and max_tokens."""
         enr, _ = self._run(resp=_Resp(GOOD_JSON))
         kwargs = enr.client.messages.calls[0]
         self.assertEqual(kwargs["model"], "claude-sonnet-4-6")
@@ -196,8 +199,8 @@ class TestEnrichImage(unittest.TestCase):
         _, card = self._run(resp=_Resp("I'm not going to answer in JSON"))
         self.assertFalse(card.parse_ok)
         self.assertFalse(card.has_content)
-        self.assertTrue(card.raw_output)          # 原始输出保留供诊断
-        self.assertEqual(card.usage["input_tokens"], 100)  # 用量仍记（钱已花）
+        self.assertTrue(card.raw_output)          # the raw output is kept for diagnosis
+        self.assertEqual(card.usage["input_tokens"], 100)  # usage is still recorded; the call was paid for
 
     def test_refusal(self):
         _, card = self._run(resp=_Resp("", stop_reason="refusal"))
@@ -218,7 +221,8 @@ class TestEnrichImage(unittest.TestCase):
         exc = anthropic.AuthenticationError("401", response=_resp_obj(401), body=None)
         with self.assertRaises(EnricherConfigError):
             self._run(exc=exc)
-        # 配置错误**不是** EnricherError 子类 → 不会被误当成"待重试"入队
+        # A configuration error is not a subclass of EnricherError, so it cannot be mistaken
+        # for something retryable and queued
         self.assertFalse(issubclass(EnricherConfigError, EnricherError))
 
     def test_bad_model_id_maps_to_config_error(self):
@@ -236,7 +240,8 @@ class TestEnrichImage(unittest.TestCase):
 
 
 class TestInterfaceAdapter(unittest.TestCase):
-    """enrich(ocr_text, metadata) 适配器：满足 EnricherInterface，可插进现有管线。"""
+    """The enrich(ocr_text, metadata) adapter, which satisfies EnricherInterface so this can
+    drop into the existing pipeline."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -247,7 +252,7 @@ class TestInterfaceAdapter(unittest.TestCase):
 
     def test_returns_tags_from_image(self):
         enr = VisionEnricher(client=_FakeClient(resp=_Resp(GOOD_JSON)))
-        tags = enr.enrich("这段 OCR 文本会被忽略", {"image_path": str(self.img)})
+        tags = enr.enrich("this OCR text is ignored", {"image_path": str(self.img)})
         self.assertEqual(tags, ["slides", "neural-networks", "lecture"])
 
     def test_without_image_path_raises_config_error(self):
@@ -258,7 +263,7 @@ class TestInterfaceAdapter(unittest.TestCase):
 
 @unittest.skipUnless(
     os.environ.get("MEMOSIGHT_LIVE_VISION") == "1" and os.environ.get("ANTHROPIC_API_KEY"),
-    "需要 MEMOSIGHT_LIVE_VISION=1 + ANTHROPIC_API_KEY（真实调用，花钱）",
+    "a real call needs MEMOSIGHT_LIVE_VISION=1 and ANTHROPIC_API_KEY, and costs money",
 )
 class TestLive(unittest.TestCase):
     def test_one_real_call(self):

@@ -1,254 +1,410 @@
-# 守门员 Task1 · 阶段 2/3 指标与提分记录
+# Gatekeeper training log, phases 2 and 3
 
-> **Summary (EN).** Chronological training log for the gatekeeper, phases 2–3, including the
-> honest starting point (test F1 0.659, FN 0.408) and each subsequent change. Contains a
-> correction notice: operator-whitelist compliance was originally a static estimate and only
-> held once export was pinned to a fixed batch of 1 — dynamic-batch export introduces three
-> non-whitelisted operators.
+2026-06-17.
 
- 日期：2026-06-17
-**基线声明**：所有指标基于 dedup 去重清单（`dedup_train/val/test.csv`，seed=42）。test 为最终裁定，val 用于调参/选阈值。
-**第一版真实基线（去重后）**：test F1 0.659、FN 0.408（@阈值0.5）；验收目标 test F1 ≥ 0.85 且 FN 较此明确下降。
+All metrics are based on the deduplicated manifest (`dedup_train/val/test.csv`, seed 42). Test
+is the deciding split; val is used for tuning and for choosing thresholds.
 
-> ⚠️ **修正声明（2026-06-18，导出实测）**：本文件下方各处"算子全 TFLM 白名单 ✅"原为 `model.py` 的
-> **静态算子核算**，未经真实导出验证。2026-06-18 首次导出 .tflite 发现：白名单保证**仅在以固定 batch=1
-> 导出时成立**；默认动态 batch(-1) 会引入 SHAPE/STRIDED_SLICE/PACK 三个非白名单算子（flatten 的动态
-> Reshape）。固定 `batch_shape=(1,96,96,1)` 导出后实测 9 算子全白名单、全 int8、权重 24.4KB、量化近无损。
-> **"已 export 实测达标（batch=1）"**，而非建模期估算。
+The honest starting point after deduplication is test F1 0.659 and FN 0.408 at threshold 0.5.
+The acceptance target is test F1 at or above 0.85, with FN clearly below that starting point.
 
----
+**Correction, 2026-06-18, after a real export.** Where this file says the operators are all on
+the TFLite Micro whitelist, that originally came from a static operator count in `model.py` and
+had not been verified by exporting. The first real `.tflite` export showed the whitelist
+guarantee holds *only* when the model is exported with a fixed batch of 1. The default dynamic
+batch (-1) pulls in three non-whitelisted operators — SHAPE, STRIDED_SLICE and PACK — via
+flatten's dynamic reshape. Exported with `batch_shape=(1,96,96,1)` pinned, the measured result
+is 9 operators all whitelisted, fully int8, 24.4 KB of weights, and near-lossless quantisation.
+Read the whitelist claims below as "verified by export at batch 1", not as a modelling-time
+estimate.
 
-## 阶段 2 — 完整指标表（基线模型 `gatekeeper_dedup_v1.keras`，阈值 0.5）
+## Phase 2: full metrics
 
-配置：bn_momentum=0.9, patience=15, start_from_epoch=20, epochs=80(早停@65, best=50),
-augment=base, class_weight=balanced, lr=1e-3。参数 24,874。
+Baseline model `gatekeeper_dedup_v1.keras`, threshold 0.5.
 
-| split | accuracy | precision | recall | F1 | FN率 | FP率 | 混淆(tn,fp,fn,tp) |
+Configuration: `bn_momentum=0.9, patience=15, start_from_epoch=20, epochs=80` (early stop at
+65, best at 50), `augment=base, class_weight=balanced, lr=1e-3`. 24,874 parameters.
+
+| split | accuracy | precision | recall | F1 | FN rate | FP rate | confusion (tn,fp,fn,tp) |
 |---|---|---|---|---|---|---|---|
-| val（调参） | 0.8097 | 0.8046 | 0.7292 | 0.7650 | 0.2708 | 0.1308 | 113,17,26,70 |
-| **test（裁定）** | 0.7403 | 0.7436 | 0.5918 | **0.6591** | **0.4082** | 0.1504 | 113,20,40,58 |
+| val (tuning) | 0.8097 | 0.8046 | 0.7292 | 0.7650 | 0.2708 | 0.1308 | 113,17,26,70 |
+| test (deciding) | 0.7403 | 0.7436 | 0.5918 | 0.6591 | 0.4082 | 0.1504 | 113,20,40,58 |
 
-机读：`docs/results/phase2_metrics.json`。
+Machine-readable: `docs/results/phase2_metrics.json`.
 
-> 观察：val/test 差距明显（val F1 0.765 vs test 0.659）。val_loss 早停选出的权重在 test 正例上 recall 偏低（0.592），FN 高达 0.408。这是诚实起点。
+The val-to-test gap is large: val F1 0.765 against test 0.659. The weights selected by
+early stopping on val_loss give low recall on test positives (0.592) and FN as high as 0.408.
+That is the honest starting point.
 
----
+## Phase 3: raising the score
 
-## 阶段 3 — 提分（按"由轻到重"，每步先看 FN 是否真降）
+Ordered lightest intervention first, checking at each step whether FN actually came down.
 
-判据：**阈值在 val 上选（最大化 val F1，平手取低 FN），再用到 test 裁定**。每步与上一步比 test FN。
+Rule: pick the threshold on val by maximising val F1, breaking ties toward lower FN, then apply
+that threshold to test for the verdict. Each step is compared against the previous one on test
+FN.
 
-### 3.1 决策阈值扫描（零成本，先做）
+### 3.1 Threshold sweep
 
-val 阈值扫描 F1 在 **阈值 0.25** 达峰（val F1 0.8325，recall 0.906，FN 0.094，FP 0.200）。
-选定阈值 **0.25**，应用到 test：
+Free, so it goes first.
 
-| 阶段 | 阈值 | test F1 | test recall | test FN率 | test FP率 | test acc |
+The val threshold sweep peaks at 0.25 (val F1 0.8325, recall 0.906, FN 0.094, FP 0.200).
+Applying threshold 0.25 to test:
+
+| Stage | Threshold | test F1 | test recall | test FN rate | test FP rate | test acc |
 |---|---|---|---|---|---|---|
-| 基线(3.0) | 0.50 | 0.6591 | 0.5918 | 0.4082 | 0.1504 | 0.7403 |
-| **3.1 阈值** | **0.25** | **0.7196** | 0.7857 | **0.2143** | 0.2932 | 0.7359 |
+| Baseline (3.0) | 0.50 | 0.6591 | 0.5918 | 0.4082 | 0.1504 | 0.7403 |
+| 3.1 threshold | 0.25 | 0.7196 | 0.7857 | 0.2143 | 0.2932 | 0.7359 |
 
-**结论：FN 0.408 → 0.214，真降（−0.194）。** F1 0.659→0.720，recall 0.592→0.786。代价 FP 0.150→0.293（在可接受范围，守门员漏报比误报更该压）。
-零成本一步即把 FN 砍掉近一半，但 F1 仍 < 0.85 → 进入 3.2。
+FN goes from 0.408 to 0.214, a real drop of 0.194. F1 goes 0.659 to 0.720 and recall 0.592 to
+0.786. The cost is FP rising from 0.150 to 0.293, which is acceptable — for a gatekeeper, a
+miss is worse than a false trigger.
 
-> **基准换算**：3.1 把 baseline 模型的 val F1 从 0.765(@0.5) 抬到峰值 **0.8325(@0.25)**，test F1 0.720。后续步骤以"val 选阈值后的 test F1 / FN"为比较口径。
+One free step nearly halves FN, but F1 is still well below 0.85, so on to 3.2.
 
-### 3.2 class weight / focal loss（偏向召回）
+For reference, 3.1 lifts the baseline model's val F1 from 0.765 at threshold 0.5 to a peak of
+0.8325 at 0.25, with test F1 0.720. Later steps are compared on "test F1 and FN after picking
+the threshold on val".
 
-在 dedup seed=42 上重训 3 个配置（脚本 `scripts/run_phase3.py`），阈值仍在 val 上按最大 F1 选：
+### 3.2 Class weighting and focal loss
 
-| 配置 | val选阈值 | val F1 | val FN | **test F1** | **test FN** | test FP |
+Three configurations retrained on dedup seed 42 (`scripts/run_phase3.py`), with the threshold
+still chosen on val by maximum F1.
+
+| Configuration | val threshold | val F1 | val FN | test F1 | test FN | test FP |
 |---|---|---|---|---|---|---|
-| 3.1 基线+阈值（对照） | 0.25 | **0.8325** | 0.094 | 0.7196 | **0.2143** | 0.2932 |
-| pos_weight×1.5 | 0.40 | 0.7917 | 0.208 | 0.7090 | 0.3163 | 0.1805 |
-| pos_weight×2.0 | 0.45 | 0.7895 | 0.219 | 0.7526 | 0.2551 | 0.1729 |
-| focal(γ2,α0.75) | 0.55 | 0.8041 | 0.188 | 0.7385 | 0.2653 | 0.1880 |
+| 3.1 baseline + threshold (control) | 0.25 | 0.8325 | 0.094 | 0.7196 | 0.2143 | 0.2932 |
+| pos_weight x1.5 | 0.40 | 0.7917 | 0.208 | 0.7090 | 0.3163 | 0.1805 |
+| pos_weight x2.0 | 0.45 | 0.7895 | 0.219 | 0.7526 | 0.2551 | 0.1729 |
+| focal (γ=2, α=0.75) | 0.55 | 0.8041 | 0.188 | 0.7385 | 0.2653 | 0.1880 |
 
-**结论：3.2 未超过 3.1。** 三个配置的 **val F1（0.79–0.80）全部低于** 3.1 的 0.8325，**test FN（0.255–0.316）也都高于** 3.1 的 0.214——FN 没降。且 val 与 test 排序矛盾（focal val 最佳 / posmult20 test 最佳），是 226 样本 val 的高方差表现。
-**诊断**：class_weight=balanced 已在 baseline 生效，再加权/换 focal 只是平移决策边界，与单纯调阈值等效，未提升模型本身的 PR 曲线。
-**真正的瓶颈是 val→test 泛化差距（val F1 0.83 vs test 0.72）**，应由数据增强（3.3）正面解决。按"没降就别在此基础上堆"的纪律，3.3 不在 3.2 的（无效）改动上叠加，回到 base 配置单独验证 screen 增强的效果。
+3.2 does not beat 3.1. All three configurations have val F1 between 0.79 and 0.80, below 3.1's
+0.8325, and test FN between 0.255 and 0.316, all above 3.1's 0.214. FN did not come down. The
+val and test rankings also contradict each other — focal is best on val while pos_weight x2.0
+is best on test — which is what a 226-sample val set with high variance looks like.
 
-### 3.3 数据增强调优（屏幕场景：小幅旋转±7° + 缩放 + JPEG 压缩噪声 45–95）
+Diagnosis: `class_weight=balanced` was already active in the baseline, so adding more weighting
+or switching to focal only translates the decision boundary, which is equivalent to adjusting
+the threshold. It does not improve the model's PR curve.
 
-在 base 翻转/亮度对比度之上叠加屏幕场景增强（幅度小以保文字可读），重训 3 个配置：
+The real bottleneck is the val-to-test generalisation gap (val F1 0.83 against test 0.72), which
+data augmentation should address directly. Following the rule of not stacking on top of a
+change that did not help, 3.3 does not build on 3.2. It returns to the base configuration and
+tests the screen augmentation on its own.
 
-| 配置 | val选阈值 | val F1 | **test F1** | **test FN** | test FP |
+### 3.3 Augmentation tuned for screen scenes
+
+Small rotation up to ±7 degrees, scaling, and JPEG compression noise at quality 45–95, layered
+on top of the base flip/brightness/contrast augmentation. Magnitudes are kept small so text
+stays readable. Three configurations retrained:
+
+| Configuration | val threshold | val F1 | test F1 | test FN | test FP |
 |---|---|---|---|---|---|
-| **screen（base 配置）** | 0.45 | 0.8125 | **0.7600** | 0.2245 | 0.1955 |
-| screen + pos×1.5 | 0.45 | 0.7638 | 0.6939 | 0.3061 | 0.2256 |
+| screen (base configuration) | 0.45 | 0.8125 | 0.7600 | 0.2245 | 0.1955 |
+| screen + pos x1.5 | 0.45 | 0.7638 | 0.6939 | 0.3061 | 0.2256 |
 | screen + focal | 0.65 | 0.8000 | 0.7282 | 0.2755 | 0.1955 |
 
-**`p33_screen`（纯 screen 增强）test F1 0.760，是全程最高**（>3.2 posmult20 的 0.753 >3.1 的 0.720）。
-**诚实警示**：按 val 口径，`p33_screen` 的 val 峰值 F1 0.8125 反而**略低于** baseline 的 0.8325——test 上的 0.04 优势落在方差校核测得的 **±0.024 噪声带**内，不能断言 screen 增强稳超 baseline。其真正价值在于**面向可穿戴部署的鲁棒性**（旋转/压缩噪声更贴合真实拍摄），这是保留它作部署候选的理由，而非纯指标。
+`p33_screen`, the pure screen augmentation, reaches test F1 0.760, the highest so far — above
+3.2's pos_weight x2.0 at 0.753 and 3.1's 0.720.
 
----
+A warning that belongs with that number: on val, `p33_screen` peaks at 0.8125, slightly *below*
+the baseline's 0.8325, and its 0.04 advantage on test sits inside the ±0.024 noise band measured
+by the variance check. It cannot be claimed that screen augmentation reliably beats baseline.
+Its real value is robustness for wearable deployment, since rotation and compression noise are
+closer to how frames will actually be captured. That is the reason to keep it as a deployment
+candidate, not the metric.
 
-## 阶段 3 小结与最佳模型操作点
+## Phase 3 summary and operating points
 
-### 最佳模型 `gatekeeper_p33_screen.keras` 的阈值-操作点曲线（节选）
+### Threshold curve for the best model
 
-| 选点依据 | 阈值 | test F1 | test recall | **test FN** | test FP |
+`gatekeeper_p33_screen.keras`, excerpt.
+
+| Selection basis | Threshold | test F1 | test recall | test FN | test FP |
 |---|---|---|---|---|---|
-| val 最大 F1 | 0.45 | 0.7600 | 0.7755 | 0.2245 | 0.1955 |
-| val FN 优先（val F1 仍 0.81） | 0.35 | 0.7306 | 0.8163 | **0.1837** | 0.3083 |
-| 平衡（守门员功耗权衡） | 0.40 | 0.7393 | 0.7959 | 0.2041 | 0.2632 |
+| Max val F1 | 0.45 | 0.7600 | 0.7755 | 0.2245 | 0.1955 |
+| FN priority on val (val F1 still 0.81) | 0.35 | 0.7306 | 0.8163 | 0.1837 | 0.3083 |
+| Balanced (gatekeeper power trade-off) | 0.40 | 0.7393 | 0.7959 | 0.2041 | 0.2632 |
 
-> 守门员场景 FN（漏报）比 FP 更该压，但 FP 直接等于"昂贵重处理被误唤醒"的功耗代价——最终阈值应落在 Task2 的"功耗 vs 漏报"Pareto 曲线上定，这里给出可选点。
+For a gatekeeper, a miss should be suppressed harder than a false trigger, but every false
+trigger is directly the power cost of waking the expensive downstream stage. The final
+threshold should be chosen on the task2 power-versus-missed-capture Pareto curve; these are the
+options.
 
-### 提分轨迹（test，正类=1）
+### Progress so far
 
-| 里程碑 | test F1 | test FN | 说明 |
+Test split, positive class = 1.
+
+| Milestone | test F1 | test FN | Note |
 |---|---|---|---|
-| 第一版真实基线(去重后,@0.5) | 0.659 | 0.408 | 泄漏修复后的诚实起点 |
-| 3.1 阈值(@0.25) | 0.720 | 0.214 | 零成本，FN 砍半，最稳的一步 |
-| 3.2 class weight/focal | — | — | 落在噪声带内，未超 3.1 |
-| **3.3 screen 增强(@0.45)** | **0.760** | 0.224 | test F1 最高；@0.35 时 FN 可降至 0.184 |
+| First honest baseline after dedup, at 0.5 | 0.659 | 0.408 | Starting point after the leakage fix |
+| 3.1 threshold at 0.25 | 0.720 | 0.214 | Free, halves FN, the most reliable single step |
+| 3.2 class weight / focal | — | — | Inside the noise band, did not beat 3.1 |
+| 3.3 screen augmentation at 0.45 | 0.760 | 0.224 | Highest test F1; at 0.35 FN drops to 0.184 |
 
-### ESP32 移植预算核查（验收项）
+### ESP32 portability budget
 
-架构全程未变（`build_model`），24,874 参数。`scripts/model.py` 复核：
-- 单层激活峰值 **72 KB**、同层输入+输出并发 **144 KB** —— 均 < 256 KB ✅
-- int8 权重 ≈ **24.3 KB** < 100 KB ✅
-- 算子：Conv2D / (BN 导出折叠进 Conv) / ReLU / MaxPool2D / AveragePooling2D / Reshape / Dense / Softmax —— **全部 TFLM 白名单** ✅
+The architecture (`build_model`) did not change at any point: 24,874 parameters. Re-checked with
+`scripts/model.py`:
 
-### 验收对照
+- Peak single-layer activation 72 KB, concurrent input plus output within a layer 144 KB, both
+  under 256 KB.
+- int8 weights about 24.3 KB, under 100 KB.
+- Operators: Conv2D, ReLU, MaxPool2D, AveragePooling2D, Reshape, Dense, Softmax, with batch
+  norm folded into Conv at export. All on the TFLite Micro whitelist.
 
-| 验收项 | 状态 |
+### Acceptance criteria
+
+| Criterion | Status |
 |---|---|
-| 可信度报告完成，0.80 真实性有结论 | ✅（acc 真且稳；FN 0.277 为假象） |
-| 完整指标表(含 F1)固化为脚本可一键复评 | ✅（`evaluate.py`） |
-| **test F1 ≥ 0.85** | ❌ **未达**（最佳 0.760） |
-| FN 较第一版真实值(0.408 / 0.337)明确下降 | ✅（降至 0.18–0.22） |
-| 仍满足 ESP32 预算 + TFLM 白名单 | ✅ |
-| 全过程关键决策/失败写进 notebook | ✅ |
+| Credibility report complete, verdict on whether 0.80 is real | Pass. Accuracy is real and stable; FN 0.277 was an artefact |
+| Full metrics including F1, reproducible from one script | Pass (`evaluate.py`) |
+| test F1 at or above 0.85 | Not met. Best is 0.760 |
+| FN clearly below the first honest values (0.408 / 0.337) | Pass. Down to 0.18–0.22 |
+| Still inside the ESP32 budget and the TFLM whitelist | Pass |
+| Key decisions and failures recorded | Pass |
 
-**结论**：3.1–3.3（轻量手段）把 test F1 从 0.659 推到 0.760、FN 从 0.408 压到 0.18–0.22，但 **F1 0.85 目标在"当前数据 + 当前骨干"下未达，且已触平台期**（val→test 差距 + 226 样本 val 高方差）。
-要继续提分需进入**高风险边界**：
-- **3.4 补数据**（须先改 `download_images.py` 按 Pexels ID 去重防再泄漏）——**触发前停下等已确认**。
-- **3.5 换更强骨干**（须仍满足 ESP32 预算 + 白名单）——**最后手段，停下等已确认**。
+Phases 3.1 to 3.3, all lightweight, took test F1 from 0.659 to 0.760 and FN from 0.408 to
+0.18–0.22. The F1 target of 0.85 was not reached with the current data and current backbone,
+and progress has plateaued — the val-to-test gap plus the high variance of a 226-sample val set.
 
-按纪律，本轮在 3.3 完成后停在 3.4 边界，等项目决定。
+Going further means entering higher-risk territory:
 
----
+- 3.4, more data. Requires fixing `download_images.py` to deduplicate by Pexels ID first, to
+  avoid re-introducing leakage. Stop before starting this and get a decision.
+- 3.5, a stronger backbone. Must still fit the ESP32 budget and the whitelist. Last resort. Stop
+  and get a decision.
 
-## 阶段 3.4 — 定向补数据（已授权执行；含负面结果与判定）
+This round stops at the 3.4 boundary after completing 3.3.
 
-### 做了什么
-1. **修 `download_images.py`**：旧逻辑只在单文件夹内按 Pexels-ID 去重，导致同图被多关键词重复下载→泄漏。改为**全局跨关键词 ID 去重**（自测：现有 data/raw 检出 85 个跨文件夹重复 id）。
-2. **FN/FP 分析定向补数据**：FN 高发正例（laptop_screen_code 0.333 / powerpoint 0.300 / classroom·projector 0.24）+ FP 高发硬负例（office_interior 0.471 / product_packaging 0.385 / phone_lock 0.348 / video_playback 0.280）。
-3. **发现**：Pexels 对相近关键词返回同一批图（同概念翻深页≈0 新增），补数据须用"概念真正不同"的新关键词。新增 14 个关键词。
-4. **产出**：raw 1628→2060（+432 唯一图），正例 751→1030。去重后 1518→**1950**（移除数 110 不变 → 新图未引入新重复）。重切分 **val 226→291、test 231→295**，正负比 0.74→0.90。check_leakage 跨 split 泄漏 = **0**。
+## Phase 3.4: targeted data expansion
 
-### 5-seed 方差校核：补数据前后对比（同口径，base 增强，test 裁定）
+Authorised and executed. Contains a negative result.
 
-| 指标 | 旧(1518) | 新(1950) | 变化 |
+### What was done
+
+1. Fixed `download_images.py`. The old logic deduplicated by Pexels ID only within a single
+   folder, so the same image was downloaded under multiple keywords and leaked across splits.
+   It now deduplicates by ID globally across keywords. A self-check found 85 cross-folder
+   duplicate IDs in the existing `data/raw`.
+2. Targeted the expansion using the FN/FP analysis. High-FN positives were
+   laptop_screen_code 0.333, powerpoint 0.300, and classroom/projector 0.24. High-FP hard
+   negatives were office_interior 0.471, product_packaging 0.385, phone_lock 0.348 and
+   video_playback 0.280.
+3. Found that Pexels returns the same set of images for closely related keywords — paging deeper
+   on the same concept adds essentially nothing. Expanding the dataset requires keywords for
+   genuinely different concepts. 14 new keywords were added.
+4. Result: raw grew 1628 to 2060 (+432 unique images) and positives 751 to 1030. After dedup,
+   1518 grew to 1950, with the same 110 removed as before, meaning the new images introduced no
+   new duplicates. The re-split moved val from 226 to 291 and test from 231 to 295, with the
+   positive-to-negative ratio going from 0.74 to 0.90. `check_leakage` reports 0 cross-split
+   leakage.
+
+### 5-seed variance, before and after the expansion
+
+Same protocol, base augmentation, test as the deciding split.
+
+| Metric | Old (1518) | New (1950) | Change |
 |---|---|---|---|
-| accuracy | 0.790±0.014 | 0.721±0.014 | **−0.069** |
-| **F1** | 0.756±0.024 | **0.699±0.024** | **−0.057** |
-| recall | 0.771±0.068 | 0.694±0.069 | −0.077 |
-| FN rate | 0.229±0.068 | 0.306±0.069 | +0.077 |
-| FP rate | 0.197±0.045 | 0.255±0.067 | +0.058 |
+| accuracy | 0.790 ± 0.014 | 0.721 ± 0.014 | −0.069 |
+| F1 | 0.756 ± 0.024 | 0.699 ± 0.024 | −0.057 |
+| recall | 0.771 ± 0.068 | 0.694 ± 0.069 | −0.077 |
+| FN rate | 0.229 ± 0.068 | 0.306 ± 0.069 | +0.077 |
+| FP rate | 0.197 ± 0.045 | 0.255 ± 0.067 | +0.058 |
 
-**补数据后聚合 F1 不升反降，且 std 几乎不变（F1 仍 ±0.024、recall 仍 ±0.069）。**
-→ **否定了"226 样本 val 高方差是平台期主因"的假设**：加数据没让指标变稳，方差是内在的，不是小样本采样噪声。
+Aggregate F1 fell rather than rose after adding data, and the standard deviation barely moved
+(F1 still ±0.024, recall still ±0.069).
 
-### 诊断：为什么变差？（v3 模型，旧 vs 新子类分项）
+That falsifies the hypothesis that the 226-sample val set's high variance was the main cause of
+the plateau. Adding data did not make the metrics steadier, so the variance is intrinsic rather
+than small-sample sampling noise.
 
-| 群体 | 正例 FN | 负例 FP |
+### Diagnosis: why did it get worse?
+
+v3 model, old subclasses against new ones.
+
+| Group | Positive FN | Negative FP |
 |---|---|---|
-| **旧子类** | **0.135**（较 v2 的 0.206 **变好**） | 0.288 |
-| **新子类** | 0.214 | **0.500** |
+| Old subclasses | 0.135 (better than v2's 0.206) | 0.288 |
+| New subclasses | 0.214 | 0.500 |
 
-**关键结论：补数据让模型在原有分布上变强了（旧正例 FN 0.206→0.135），但我引入的新概念把问题分布拓宽变难了**——新负例（smartphone apps / tv 菜单 / 商品标签，典型"有文字但不该记"）FP 高达 0.50，是新瓶颈。聚合 F1 下降反映的是**更难、更真实的分布**，不是能力退化。新正例里 conference_keynote/webinar/data_dashboard 等"演讲场景"也偏难（FN 0.3–0.5，mean_p1 低），部分图文字不突出、接近边界。
+Adding data made the model stronger on the original distribution — FN on old positives went
+from 0.206 to 0.135 — but the new concepts widened the problem distribution and made it harder.
+The new negatives (smartphone apps, TV menus, product labels — the classic "has text but should
+not be recorded" cases) have FP as high as 0.50, and are the new bottleneck. The drop in
+aggregate F1 reflects a harder and more realistic distribution rather than a loss of capability.
 
-### v3_robust 完整指标（部署候选，阈值 0.4 val 选）
+Some of the new positives are also hard: conference keynote, webinar and data dashboard scenes
+have FN of 0.3 to 0.5 with low mean positive probability, and in several of those images the
+text is not prominent, putting them close to the boundary.
 
-| split | acc | precision | recall | F1 | FN率 | FP率 |
+### v3_robust full metrics
+
+Deployment candidate, threshold 0.4 chosen on val.
+
+| split | acc | precision | recall | F1 | FN rate | FP rate |
 |---|---|---|---|---|---|---|
-| val（调参） | 0.7766 | 0.7110 | 0.8913 | 0.7910 | 0.1087 | 0.3268 |
-| **test（裁定）** | 0.7322 | 0.6875 | 0.7914 | **0.7358** | 0.2086 | 0.3205 |
+| val (tuning) | 0.7766 | 0.7110 | 0.8913 | 0.7910 | 0.1087 | 0.3268 |
+| test (deciding) | 0.7322 | 0.6875 | 0.7914 | 0.7358 | 0.2086 | 0.3205 |
 
-ESP32：架构未变，激活峰值 72KB、int8 权重 24.3KB、算子全 TFLM 白名单——达标。
-> 注：v3 的 test F1 0.736 与 v2_best 的 0.760 **不可直接比**——test 集不同（295 难分布 vs 231）。同口径的方差对比（上表）才是裁定。
+ESP32: architecture unchanged, peak activation 72 KB, int8 weights 24.3 KB, all operators
+whitelisted. Within budget.
 
-### 验收对照（阶段 3.4 终）
+v3's test F1 of 0.736 is not directly comparable with v2_best's 0.760, because the test sets
+differ — 295 images on a harder distribution against 231. The same-protocol variance comparison
+in the table above is the one that decides.
 
-| 验收项 | 状态 |
+### Acceptance criteria at the end of 3.4
+
+| Criterion | Status |
 |---|---|
-| test F1 ≥ 0.85 | ❌ 未达（同口径 0.70，比扩充前更低） |
-| FN 较第一版真实值(0.408)下降 | ✅ 部署点 0.21（仍下降） |
-| ESP32 预算 + TFLM 白名单 | ✅ |
-| 全过程写进 notebook | ✅ |
+| test F1 at or above 0.85 | Not met. 0.70 under the same protocol, lower than before the expansion |
+| FN below the first honest value (0.408) | Pass. 0.21 at the deployment point |
+| ESP32 budget and TFLM whitelist | Pass |
+| Process recorded | Pass |
 
-### 诚实判定：再补能否到 85% / 是否该接受当前值进硬件实测
+### Verdict: would more data reach 85%, and should the current model go to hardware?
 
-**判定：单纯再补"更多 Pexels 通用数据"不太可能到 0.85，且可能进一步拉低聚合 F1。建议接受当前模型进 Task2 硬件实测，把"提到 85%"作为需要你决策的范围问题单列。** 依据：
+Verdict: simply adding more generic Pexels data is unlikely to reach 0.85 and may lower
+aggregate F1 further. The recommendation is to accept the current model for task2 hardware
+measurement, and to treat "reach 85%" as a separate scope question requiring a decision.
 
-1. **方差是内在的，非样本量驱动**：+432 张、val 扩 29%，std 纹丝不动。说明瓶颈不是"数据不够多"，加同类数据不会让它收敛到 0.85。
-2. **新瓶颈是边界本身的歧义**：新硬负例 FP 0.50（手机 app 文字 / TV 菜单 / 商品标签算不算"有用文字"？语义上就模糊）。这是**标签定义问题**，不是数据量问题——再下 1000 张手机截图也救不了一个定义不清的边界。
-3. **可获取数据已近天花板**：Pexels 同概念翻深页 0 新增；要继续扩只能引入更杂的新概念，而那恰恰拉低聚合指标。
-4. **模型在"干净原分布"上其实达标趋势好**（旧正例 FN 已 0.135）——若把场景**收窄回首发的"白板/文档/PPT/代码屏"清晰边界**（`docs/label-scope.md` 首发场景），现有模型已接近可用；是我在 3.4 主动把负例边界扩到了手机/电视/包装这些"首发不该纳入"的硬歧义类。
+The reasoning:
 
-**给用户的三个选项（需你定，均超出本轮自主边界）**：
-- **A. 接受当前模型进 Task2 硬件实测**：用 v2_best（原清晰分布 F1 0.760）或 v3_robust（更鲁棒但分布更难），跑功耗 vs 漏报 Pareto。**推荐**——MVP 要的是 Pareto 曲线，不是单点 F1。
-- **B. 收窄标签边界**：把"手机 app/TV 菜单/商品标签"明确划为"不算正例触发场景"并从硬负例里剔除歧义项，重训。预计聚合 F1 回升（回到清晰边界）。
-- **C. 解禁 3.5 换骨干**：若坚持要 0.85 且保留宽边界，需更大容量模型——但这与"极小专门化守门员"叙事冲突，你已排除。
+1. The variance is intrinsic, not driven by sample size. Adding 432 images and expanding val by
+   29% left the standard deviation unchanged. The bottleneck is not that there is too little
+   data, so more of the same will not converge it to 0.85.
+2. The new bottleneck is ambiguity in the boundary itself. The new hard negatives have FP 0.50.
+   Whether phone app text, a TV menu or a product label counts as "useful text" is semantically
+   unclear. That is a label-definition problem, not a data-volume problem, and another thousand
+   phone screenshots will not rescue an ill-defined boundary.
+3. Available data is close to exhausted. Paging deeper on the same concept in Pexels adds
+   nothing, so expanding further means introducing messier new concepts, which is exactly what
+   lowered the aggregate metrics.
+4. On the clean original distribution the model is trending well — FN on old positives is
+   already 0.135. Narrowing the scope back to the launch boundary of whiteboards, documents,
+   slides and code screens (`docs/label-scope.md`) would leave the existing model close to
+   usable. It was phase 3.4 that widened the negative boundary out to phones, televisions and
+   packaging, which are hard ambiguous classes the launch scope should not have included.
 
-按硬规则，A/B/C 都涉及方向决策，停下等你。
+Three options, all beyond what this round decides on its own:
 
----
+- A. Accept the current model and go to task2 hardware measurement, using v2_best (F1 0.760 on
+  the original clean distribution) or v3_robust (more robust but on a harder distribution), and
+  produce the power-versus-missed-capture Pareto curve. Recommended: the MVP deliverable is the
+  Pareto curve, not a single F1 number.
+- B. Narrow the label boundary. Define phone app, TV menu and product label as outside the
+  positive trigger scope and remove the ambiguous items from the hard negatives, then retrain.
+  Aggregate F1 should recover as the boundary gets cleaner.
+- C. Unblock 3.5 and change the backbone. If 0.85 is required while keeping the wide boundary,
+  a higher-capacity model is needed — but that conflicts with the "very small specialised
+  gatekeeper" premise, which has already been ruled out.
 
-## 阶段 3.4-B — 收窄标签边界回 MVP 原定义（用户选 B，执行）
+All three are direction decisions, so this round stops here.
 
-### 边界变更（已在 `docs/label-scope.md` 正式留痕）
-正类 = 首发"有用文字屏幕"（投影/电脑/课件/白板/文档/代码屏）。
-**剔除歧义硬负例（有文字但非首发场景）**：商品包装/标签（`product_packaging_text` + 3.4 的 `grocery_product_label`/`cosmetic_packaging_closeup`）、手机 App（`smartphone_apps_home_screen`）、TV 菜单（`tv_streaming_menu_screen`）——共 5 子类、198 张。
-**保留的清晰负例**：手机锁屏、放视频的屏幕、招牌/路牌、书脊、无文字风景/人像/室内/食物。
-被剔除行归档于 `data/processed/manifest_out_of_scope.csv`（不删图，仅出训练/评估，可追溯）。
+## Phase 3.4-B: narrowing the label boundary back to the MVP definition
 
-数据：剔除后 2060→1862，去重后 **1752**（正 923 / 负 829，正负比翻为 1.11）。重切分 val 261 / test 265。check_leakage 跨 split 泄漏 = **0**。
+Option B was chosen and executed.
 
-### 5-seed 方差：三口径对比（同口径，base 增强，test 裁定，阈值0.5）
+### The boundary change
 
-| 指标 | 基线1518(清晰旧) | 宽边界1950(3.4) | **收窄1752(B)** |
+Formally recorded in `docs/label-scope.md`.
+
+Positive class is the launch definition of a useful text screen: projector, computer screen,
+slides, whiteboard, document page, code screen.
+
+Ambiguous hard negatives removed — cases with text that are not launch scenes: product
+packaging and labels (`product_packaging_text` plus 3.4's `grocery_product_label` and
+`cosmetic_packaging_closeup`), phone apps (`smartphone_apps_home_screen`) and TV menus
+(`tv_streaming_menu_screen`). Five subclasses, 198 images.
+
+Clear negatives kept: phone lock screens, screens playing video, signage and street signs, book
+spines, and textless landscapes, portraits, interiors and food.
+
+Removed rows are archived in `data/processed/manifest_out_of_scope.csv`. The images are not
+deleted, only excluded from training and evaluation, so the change stays traceable.
+
+Data: 2060 dropped to 1862 after removal, and 1752 after dedup (923 positive, 829 negative,
+with the positive-to-negative ratio flipping to 1.11). Re-split gives val 261 and test 265.
+`check_leakage` reports 0 cross-split leakage.
+
+### 5-seed variance across the three label definitions
+
+Same protocol, base augmentation, test as the deciding split, threshold 0.5.
+
+| Metric | Baseline 1518 (clean, old) | Wide boundary 1950 (3.4) | Narrowed 1752 (B) |
 |---|---|---|---|
-| accuracy | 0.790±0.014 | 0.721±0.014 | 0.741±0.018 |
-| **F1** | 0.756±0.024 | 0.699±0.024 | **0.757±0.012** |
-| recall | 0.771±0.068 | 0.694±0.069 | 0.770±0.066 |
-| FN rate | 0.229±0.068 | 0.306±0.069 | 0.230±0.066 |
-| FP rate | 0.197±0.045 | 0.255±0.067 | 0.290±0.100 |
+| accuracy | 0.790 ± 0.014 | 0.721 ± 0.014 | 0.741 ± 0.018 |
+| F1 | 0.756 ± 0.024 | 0.699 ± 0.024 | 0.757 ± 0.012 |
+| recall | 0.771 ± 0.068 | 0.694 ± 0.069 | 0.770 ± 0.066 |
+| FN rate | 0.229 ± 0.068 | 0.306 ± 0.069 | 0.230 ± 0.066 |
+| FP rate | 0.197 ± 0.045 | 0.255 ± 0.067 | 0.290 ± 0.100 |
 
-**核心结论**：
-- **收窄后 F1 由宽边界的 0.699 回升到 0.757，且 std 从 0.024 砍半到 0.012**——这从反方向坐实了 3.4 的诊断：宽边界的下降是**边界歧义**造成的，去掉歧义负例后 F1 既回到清晰基线水平、又**更稳**。FN/recall 同步恢复（0.230 / 0.770）。
-- **代价：FP 升到 0.290±0.100**。原因明确：剔除了"有文字但不记"的负例（包装/app/TV菜单），等于拿掉了教模型"光有文字≠该记"的样本，加上数据集翻为正例偏多，模型更倾向判正→对剩余负例（视频屏/招牌等）误报上升，且 FP 跨 seed 不稳（std 0.10）。
-- **口径提示**：本表为"MVP 原定义口径"，与含歧义负例的"宽边界口径"**不可直接比**；与"基线1518"也只是近似（1752 含 3.4 新增的较难正例）。
+Narrowing lifts F1 from the wide boundary's 0.699 back to 0.757, and halves the standard
+deviation from 0.024 to 0.012. That confirms the 3.4 diagnosis from the opposite direction: the
+drop under the wide boundary was caused by boundary ambiguity, and removing the ambiguous
+negatives both restores F1 to the clean baseline level and makes it steadier. FN and recall
+recover in step, at 0.230 and 0.770.
 
-### v4_mvp 完整指标（部署候选，val 选阈值=0.55，单 seed=42）
+The cost is FP rising to 0.290 ± 0.100. The reason is clear. Removing the "has text but do not
+record" negatives — packaging, apps, TV menus — took away the examples that taught the model
+that text alone is not a reason to record, and the dataset now leans positive. The model
+therefore tilts toward predicting positive, so false triggers on the remaining negatives (video
+screens, signage) rise, and FP is unstable across seeds at std 0.10.
 
-| split | acc | precision | recall | F1 | FN率 | FP率 |
+Measurement note: this table is under the MVP label definition and is not directly comparable
+with the wide-boundary numbers. Even the comparison against baseline 1518 is only approximate,
+since 1752 includes the harder positives added in 3.4.
+
+### v4_mvp full metrics
+
+Deployment candidate, threshold 0.55 chosen on val, single seed 42.
+
+| split | acc | precision | recall | F1 | FN rate | FP rate |
 |---|---|---|---|---|---|---|
-| val（调参） | 0.7893 | 0.7943 | 0.8116 | 0.8029 | 0.1884 | 0.2358 |
-| **test（裁定）** | 0.7736 | 0.7883 | 0.7770 | **0.7826** | 0.2230 | 0.2302 |
+| val (tuning) | 0.7893 | 0.7943 | 0.8116 | 0.8029 | 0.1884 | 0.2358 |
+| test (deciding) | 0.7736 | 0.7883 | 0.7770 | 0.7826 | 0.2230 | 0.2302 |
 
-ESP32：架构未变，激活峰值 72KB、int8 权重 24.3KB、算子全 TFLM 白名单——达标。
+ESP32: architecture unchanged, peak activation 72 KB, int8 weights 24.3 KB, all operators
+whitelisted. Within budget.
 
-### 验收对照（阶段 3.4-B）
+### Acceptance criteria at the end of 3.4-B
 
-| 验收项 | 状态 |
+| Criterion | Status |
 |---|---|
-| test F1 ≥ 0.85 | ❌ 未达（5-seed 0.757±0.012；单 seed 最佳 0.783） |
-| FN 较第一版真实值(0.408)下降 | ✅ 0.22（明确下降） |
-| std 是否收窄 | ✅ **F1 std 0.024→0.012，收窄一半** |
-| ESP32 预算 + TFLM 白名单 | ✅ |
-| `docs/label-scope.md` / notebook 边界变更留痕 | ✅ |
+| test F1 at or above 0.85 | Not met. 5-seed 0.757 ± 0.012; best single seed 0.783 |
+| FN below the first honest value (0.408) | Pass. 0.22, a clear drop |
+| Did the standard deviation narrow | Pass. F1 std 0.024 to 0.012, halved |
+| ESP32 budget and TFLM whitelist | Pass |
+| Boundary change recorded in `docs/label-scope.md` | Pass |
 
-### 诚实判定：当前模型是否可靠到值得进 Task2 硬件实测（供用户+导师决策，不代替决定）
+### Verdict: is the model reliable enough for task2 hardware measurement?
 
-**技术判断：在收窄的 MVP 边界上，模型已是一个稳定、达标可移植、FN 受控的诚实工件，技术上具备开始硬件 Pareto 表征的条件；但它不是一个 0.85-F1 的成品分类器，且 FP 是当前更弱的一维。** 依据：
+Technical judgement: under the narrowed MVP boundary the model is a stable, portable, honest
+artifact with FN under control, and it is technically ready to begin hardware Pareto
+characterisation. It is not a finished 0.85-F1 classifier, and FP is currently its weaker
+dimension.
 
-- **正面**：F1 0.757±0.012（方差砍半，说明清晰边界下问题更可学、更稳）；FN 0.22（远低于第一版真实 0.408）；阈值是现成的 FN/FP/功耗调节旋钮（test 阈值 0.45→0.55，FP 0.29→0.23、FN 0.17→0.22 可调）；ESP32 预算达标。Task2 的 MVP 交付是"功耗 vs 漏报 Pareto 曲线"，这需要的正是一个 FN 可调、可移植的稳定守门员，而非单点高 F1。
-- **保留**：F1 未达 0.85；FP ~0.23–0.29 且跨 seed 不稳（std 0.10），意味着约 1/4 的非首发画面会误唤醒重处理——这是**功耗代价**，恰好是 Task2 要量化的量，但也说明"误报维度"还不成熟。
-- **我不替你和导师决定是否进硬件**。若目标是"拿 Pareto 曲线验证级联守门员可行性"，当前模型够用且诚实；若期望"先有 0.85 的干净分类器再上板"，则未到。
-- **若要继续提 F1（不进硬件）**：下一步最高性价比不是再补数据（3.4 已证无效），而是 (i) 针对 FP 高的保留负例（视频屏/招牌）做硬负例增强、(ii) 把阈值/类权重往降 FP 方向调并接受 recall 略降、(iii) 仍不够才考虑容量（3.5，你已排除）。
+In favour: F1 0.757 ± 0.012, with variance halved, which suggests the problem is more learnable
+and more stable under a clean boundary. FN 0.22, far below the first honest 0.408. The
+threshold is an existing knob for trading FN, FP and power against each other — moving the test
+threshold from 0.45 to 0.55 moves FP from 0.29 to 0.23 and FN from 0.17 to 0.22. And the ESP32
+budget is met. The task2 MVP deliverable is a power-versus-missed-capture Pareto curve, which
+needs exactly this: a stable, portable gatekeeper with an adjustable FN, rather than a single
+high F1.
 
-**本轮按要求只执行到此，停下等你与导师决策，不自主进入 Task2。**
+Against: F1 has not reached 0.85. FP sits at roughly 0.23 to 0.29 and is unstable across seeds
+at std 0.10, meaning about a quarter of non-launch frames would falsely wake the downstream
+stage. That is a power cost, and quantifying it is precisely what task2 is for, but it also
+means the false-positive dimension is not yet mature.
+
+Whether to move to hardware is a decision to be taken, not one to be assumed. If the goal is a
+Pareto curve validating the cascade concept, the current model is good enough and honest about
+its limits. If the expectation is a clean 0.85 classifier before touching hardware, it is not
+there.
+
+If the goal is to keep pushing F1 instead of going to hardware, the best value next is not more
+data — 3.4 already showed that does not work. It would be, in order: hard-negative augmentation
+targeting the retained negatives with high FP (video screens, signage); shifting the threshold
+and class weights toward lower FP and accepting slightly lower recall; and only if neither is
+enough, revisiting capacity (3.5, already ruled out).

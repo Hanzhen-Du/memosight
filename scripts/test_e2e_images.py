@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""端到端验证：从 data/raw/positive/ 随机抽 N 张正例图，逐张走完整条闭环，汇总结果。
+"""End-to-end verification: sample N positive images from data/raw/positive/, run each through
+the whole loop, and summarise the results.
 
-链路（全真，除守门员触发是 mock）：真图 → grab_frame → 真 Tesseract OCR → 真 DeepSeek enrich
-→ 存 SQLite（**独立测试库**，不污染正式 memory 库）→ 汇总表 + 统计。
+The chain is entirely real except the gatekeeper trigger, which is mocked: real image,
+grab_frame, real Tesseract OCR, real DeepSeek enrichment, stored to SQLite in a separate test
+database so the production memory database is untouched, then a summary table and statistics.
 
-用法：
+Usage:
   .venv/bin/python scripts/test_e2e_images.py [--n 10] [--seed 42] [--enricher deepseek]
 
-安全：
-- 用独立测试库（默认 data/mvp_demo/test_e2e.db），不写正式库。
-- grab_frame 只**拷贝**测试图到 frames_dir 再处理，原图 data/raw/positive/ 绝不动。
-- 加载图片在 OCR preprocess 里先 resize（max_side）再处理，避免内存问题。
-- 只抽 N 张，控制 DeepSeek token 消耗。
+Safety:
+- Uses a separate test database, data/mvp_demo/test_e2e.db by default, and never writes to the
+  production one.
+- grab_frame copies the test image into frames_dir before processing, so the originals in
+  data/raw/positive/ are never touched.
+- Images are resized by max_side inside the OCR preprocessing before anything else, which
+  avoids memory problems.
+- Only N images are sampled, which bounds DeepSeek token spend.
 """
 
 from __future__ import annotations
@@ -37,18 +42,20 @@ IMG_EXTS = (".jpg", ".jpeg", ".png")
 
 
 def list_all_images(folder: Path) -> list[Path]:
-    """按文件名排序列出文件夹里所有图（递归）。用于跑精选演示图，不抽样。"""
+    """List every image in a folder recursively, sorted by filename. Used to run a curated
+    demo set rather than a sample."""
     imgs = [p for p in folder.rglob("*") if p.suffix.lower() in IMG_EXTS]
     return sorted(imgs, key=lambda p: p.name)
 
 
 def stratified_sample(n: int, rng: random.Random) -> list[Path]:
-    """跨类别分层抽样：尽量从不同场景子目录各抽一张，覆盖多类别。"""
+    """Stratified sampling across categories: take one image from as many different scene
+    subdirectories as possible, for broad coverage."""
     cats = [d for d in sorted(POSITIVE_ROOT.iterdir()) if d.is_dir()]
     cats = [d for d in cats if any(f.suffix.lower() in IMG_EXTS for f in d.iterdir())]
     rng.shuffle(cats)
     picked: list[Path] = []
-    # 先每类抽 1 张，直到凑够 n；类别不够再回头多抽
+    # Take one per category until n is reached; if there are not enough categories, go round again
     round_no = 0
     while len(picked) < n and round_no < 10:
         for d in cats:
@@ -77,8 +84,10 @@ def first_words(text: str, n: int = 15) -> str:
 
 
 def ocr_looks_valid(text: str) -> bool:
-    """启发式：认为 OCR 出了有效文本 = 至少 5 个 >=3 字母的词（宽松，仅用于统计粗分类）。"""
-    words = re.findall(r"[A-Za-z一-鿿]{3,}", text)
+    """Heuristic for whether OCR produced usable text: at least 5 words of 3 or more
+    characters. Deliberately loose, and only used for coarse statistics."""
+    # The escaped range is the CJK block; behaviour is identical to writing the characters out
+    words = re.findall(r"[A-Za-z\u4e00-\u9fff]{3,}", text)
     return len(words) >= 5
 
 
@@ -87,17 +96,18 @@ def main():
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--dir", default=None,
-                    help="跑指定文件夹里所有图（不抽样，用于精选演示图）")
+                    help="run every image in this folder, without sampling. For a curated demo set")
     ap.add_argument("--enricher", choices=("deepseek", "claude", "mock"), default="deepseek")
     ap.add_argument("--db", default=str(REPO_ROOT / "data" / "mvp_demo" / "test_e2e.db"))
     args = ap.parse_args()
 
     if args.dir:
         images = list_all_images(Path(args.dir))
-        print(f"跑文件夹 {args.dir} 全部 {len(images)} 张（不抽样）\n")
+        print(f"running all {len(images)} images in {args.dir}, no sampling\n")
     else:
         images = stratified_sample(args.n, random.Random(args.seed))
-        print(f"抽样 seed={args.seed}，抽到 {len(images)} 张（跨 {len({p.parent.name for p in images})} 个类别）\n")
+        print(f"sampled with seed={args.seed}: {len(images)} images across "
+              f"{len({p.parent.name for p in images})} categories\n")
 
     cfg = config_mod.Config(
         db_path=Path(args.db),
@@ -106,42 +116,44 @@ def main():
     )
     pipe = build_pipeline(cfg=cfg, connectivity=ConnectivityMock(online=True),
                           enricher=make_enricher(args.enricher))
-    print(f"OCR 引擎={pipe.ocr.name} | enricher={pipe.ingest.transport.enricher.name} | db={args.db}\n")
+    print(f"OCR engine={pipe.ocr.name} | enricher={pipe.ingest.transport.enricher.name} | "
+          f"db={args.db}\n")
 
     rows = []
     for i, img in enumerate(images, 1):
         short = f"{img.parent.name}/{img.name}"
         rec = {"n": i, "img": short, "ocr": "", "tags": None, "status": "?", "err": ""}
         try:
-            card = pipe.capture(img, trigger_confidence=0.9)  # mock 触发→帧→OCR→enrich→存
+            card = pipe.capture(img, trigger_confidence=0.9)  # mocked trigger, frame, OCR, enrich, store
             rec["ocr"] = (card.ocr_text or "").replace("\n", " ").strip()
             rec["tags"] = card.tags
-            rec["status"] = card.status  # done=enrich成功 / pending=DeepSeek瞬时失败入队
+            rec["status"] = card.status  # done means enrichment succeeded; pending means a transient
+                                         # DeepSeek failure put it in the queue
         except EnricherConfigError as e:
             rec["status"] = "config-error"
             rec["err"] = str(e)[:80]
-        except Exception as e:  # 抓帧/OCR 等异常，如实记录
+        except Exception as e:  # frame grab, OCR and similar failures, recorded as they are
             rec["status"] = "error"
             rec["err"] = f"{type(e).__name__}: {e}"[:80]
         rows.append(rec)
         print(f"[{i}/{len(images)}] {short} -> status={rec['status']}, "
               f"ocr_chars={len(rec['ocr'])}, tags={rec['tags']}")
 
-    # ---- 汇总表 ----
+    # ---- summary table ----
     print("\n" + "=" * 100)
-    print("汇总表")
+    print("Summary")
     print("=" * 100)
-    hdr = f'{"#":<3}{"图片(类别/名)":<48}{"OCR前~15词":<44}{"tags":<44}{"成功?"}'
+    hdr = f'{"#":<3}{"image (category/name)":<48}{"first ~15 OCR words":<44}{"tags":<44}{"ok?"}'
     print(hdr)
     print("-" * 100)
     for r in rows:
-        ok = "✓" if r["status"] == "done" else ("~pending" if r["status"] == "pending" else "✗")
+        ok = "ok" if r["status"] == "done" else ("pending" if r["status"] == "pending" else "fail")
         tags = ",".join(r["tags"]) if r["tags"] else ("[]" if r["tags"] == [] else "-")
         print(f'{r["n"]:<3}{r["img"][:46]:<48}{first_words(r["ocr"])[:42]:<44}{tags[:42]:<44}{ok}')
         if r["err"]:
             print(f'     ! {r["err"]}')
 
-    # ---- 统计 ----
+    # ---- statistics ----
     total = len(rows)
     done = sum(1 for r in rows if r["status"] == "done")
     pending = sum(1 for r in rows if r["status"] == "pending")
@@ -152,17 +164,19 @@ def main():
     tags_empty = sum(1 for r in rows if r["tags"] == [])
 
     print("\n" + "=" * 100)
-    print("统计")
+    print("Statistics")
     print("=" * 100)
-    print(f"总数: {total}")
-    print(f"端到端存卡成功(status=done): {done}/{total}")
-    print(f"  其中 DeepSeek 返回非空 tags: {tags_nonempty}；返回 []（乱码/无意义）: {tags_empty}")
-    print(f"DeepSeek 瞬时失败入 pending: {pending}")
-    print(f"OCR/抓帧等报错: {errored}")
-    print(f"OCR 出了有效文本(启发式≥5词): {ocr_valid}/{total}；基本空/乱码: {ocr_thin}/{total}")
-    ds_calls = done + pending  # 真正尝试调用 DeepSeek 的次数
+    print(f"total: {total}")
+    print(f"end-to-end cards stored (status=done): {done}/{total}")
+    print(f"  of which DeepSeek returned non-empty tags: {tags_nonempty}; "
+          f"returned [] because the text was noise: {tags_empty}")
+    print(f"queued as pending after a transient DeepSeek failure: {pending}")
+    print(f"errors in OCR, frame grab and similar: {errored}")
+    print(f"OCR produced usable text by the 5-word heuristic: {ocr_valid}/{total}; "
+          f"essentially empty or noise: {ocr_thin}/{total}")
+    ds_calls = done + pending  # how many DeepSeek calls were actually attempted
     if ds_calls:
-        print(f"DeepSeek 调用成功率: {done}/{ds_calls} = {done/ds_calls*100:.0f}%")
+        print(f"DeepSeek call success rate: {done}/{ds_calls} = {done/ds_calls*100:.0f}%")
 
     pipe.close()
 

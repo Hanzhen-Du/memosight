@@ -1,9 +1,11 @@
-"""DirectUploadMock —— 树莓派"直连云端"模式的 mock 传输。
+"""DirectUploadMock: a mock transport for the Pi uploading directly to the cloud.
 
-直连模式下，Pi 直接把 payload 发给云端 enricher；这里用注入的 enricher 完成
-tags 生成，组装成一张 status=done 的 memory card 返回（未入库）。
+In direct mode the Pi sends the payload straight to the cloud enricher. Here the injected
+enricher generates the tags and the result is assembled into a memory card with status=done,
+which is returned rather than persisted.
 
-未来"经手机中转"的实现只需换成另一个 UploadInterface，上层管线不变。
+A phone-relay implementation later is just another UploadInterface; the pipeline above is
+unchanged.
 """
 
 from __future__ import annotations

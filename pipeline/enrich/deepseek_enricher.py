@@ -1,18 +1,22 @@
-"""DeepSeekEnricher —— 用 DeepSeek 打标（默认实现）。
+"""DeepSeekEnricher: tagging via DeepSeek. This is the default implementation.
 
-DeepSeek 走 OpenAI 兼容 SDK：
+DeepSeek is reached through the OpenAI-compatible SDK:
     from openai import OpenAI
     client = OpenAI(api_key=..., base_url="https://api.deepseek.com")
     client.chat.completions.create(model="deepseek-v4-flash", messages=[...], ...)
 
-复用 CloudEnricher(Claude) 那套 system prompt 与解析逻辑（strip 围栏 + json.loads +
-容错返回 []）。真标签**不带** `mock:` 前缀。密钥只经 pipeline.env.get_deepseek_api_key()
-从 os.environ 读（复用现有 python-dotenv 加载），**绝不硬编码**。
+It reuses CloudEnricher's system prompt and parsing logic (strip the code fence, json.loads,
+tolerate failure by returning []). Real tags carry no `mock:` prefix. The key is read only
+through pipeline.env.get_deepseek_api_key() from os.environ, reusing the existing python-dotenv
+loading, and is never hardcoded.
 
-错误语义与 Claude 版一致：
-- 瞬时（网络 / 限流 429 / 5xx / 超时）→ EnricherError → 入 pending 重试。
-- 配置（密钥无效 401 / 无权限 403 / 模型 ID 错误 404 / 请求非法 400）→ EnricherConfigError → 不入队。
-- 调用成功但无法解析成 tags → 返回 []（记 warning，不崩）。
+Error semantics match the Claude version:
+- Transient (network, 429 rate limiting, 5xx, timeout) raises EnricherError and the card is
+  queued as pending for retry.
+- Configuration (401 invalid key, 403 no permission, 404 wrong model id, 400 malformed request)
+  raises EnricherConfigError and is not queued.
+- A successful call whose content cannot be parsed into tags returns [], logging a warning
+  rather than crashing.
 """
 
 from __future__ import annotations
@@ -22,19 +26,20 @@ from typing import Any, Optional
 
 from ..env import get_deepseek_api_key
 from .base import EnricherConfigError, EnricherError, EnricherInterface
-# 复用 Claude 版的 prompt 与解析逻辑（单一真源）
+# Reuse the Claude version's prompt and parsing logic, so there is a single source of truth
 from .cloud_enricher import SYSTEM_PROMPT, _parse_tags
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "deepseek-v4-flash"  # 轻任务、便宜快。注意：deepseek-chat 2026-07-24 退役，勿用。
+DEFAULT_MODEL = "deepseek-v4-flash"  # cheap and fast for a light task. Note that deepseek-chat
+                                     # was retired on 2026-07-24 and must not be used.
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
 class DeepSeekEnricher(EnricherInterface):
-    """基于 DeepSeek（OpenAI 兼容 API）的真 enricher。"""
+    """The real enricher backed by DeepSeek through its OpenAI-compatible API."""
 
-    name = "deepseek"  # 真实现，标签不带 mock: 前缀
+    name = "deepseek"  # a real implementation, so tags carry no mock: prefix
 
     def __init__(
         self,
@@ -42,8 +47,8 @@ class DeepSeekEnricher(EnricherInterface):
         max_tokens: int = 300,
         max_tags: int = 6,
         base_url: str = DEEPSEEK_BASE_URL,
-        client: Optional[Any] = None,   # 可注入（测试用）；否则惰性构造
-        api_key: Optional[str] = None,  # 可显式传；否则从 env 读
+        client: Optional[Any] = None,   # injectable for tests; otherwise constructed lazily
+        api_key: Optional[str] = None,  # may be passed explicitly; otherwise read from the environment
     ):
         self.model = model
         self.max_tokens = max_tokens
@@ -54,15 +59,16 @@ class DeepSeekEnricher(EnricherInterface):
 
     @property
     def client(self):
-        """惰性构造 OpenAI 客户端（指向 DeepSeek）。缺密钥时抛 EnricherConfigError。"""
+        """Construct the OpenAI client, pointed at DeepSeek, lazily. Raises
+        EnricherConfigError if the key is missing."""
         if self._client is None:
-            from openai import OpenAI  # 局部 import：没装 SDK 也能 import 本模块
+            from openai import OpenAI  # local import, so this module imports without the SDK installed
 
             key = self._api_key or get_deepseek_api_key()
             if not key:
                 raise EnricherConfigError(
-                    "未找到 DEEPSEEK_API_KEY。请在项目根 .env 写入 DEEPSEEK_API_KEY=...，"
-                    "或在环境里 export（.env 已 gitignore）。"
+                    "DEEPSEEK_API_KEY not found. Put DEEPSEEK_API_KEY=... in a .env at the "
+                    "project root, or export it in the environment. .env is gitignored."
                 )
             self._client = OpenAI(api_key=key, base_url=self.base_url)
         return self._client
@@ -81,7 +87,7 @@ class DeepSeekEnricher(EnricherInterface):
     def enrich(self, ocr_text: str, metadata: dict[str, Any]) -> list[str]:
         import openai
 
-        client = self.client  # 缺密钥 → EnricherConfigError（不入队）
+        client = self.client  # a missing key raises EnricherConfigError and is not queued
         try:
             resp = client.chat.completions.create(
                 model=self.model,
@@ -98,15 +104,18 @@ class DeepSeekEnricher(EnricherInterface):
             openai.NotFoundError,
             openai.BadRequestError,
         ) as e:
-            # 配置类错误：重试无用，抛 EnricherConfigError（不入队）
-            raise EnricherConfigError(f"DeepSeek API 配置错误（不重试）: {e}") from e
+            # Configuration error: retrying is pointless, so raise EnricherConfigError and do
+            # not queue
+            raise EnricherConfigError(f"DeepSeek API configuration error, not retried: {e}") from e
         except openai.APIError as e:
-            # 瞬时错误（连接/限流/5xx/超时）：抛 EnricherError → 上层入 pending 重试
-            raise EnricherError(f"DeepSeek API 瞬时失败（可重试）: {e}") from e
+            # Transient error (connection, rate limit, 5xx, timeout): raise EnricherError so
+            # the layer above queues it as pending and retries
+            raise EnricherError(f"DeepSeek API transient failure, retryable: {e}") from e
 
         choice = resp.choices[0] if resp.choices else None
-        # 内容过滤等导致无内容 → 空标签（不入队死循环）
+        # No content, for instance because of content filtering: return empty tags rather than
+        # looping forever in the queue
         if choice is None or choice.message is None or choice.message.content is None:
-            logger.warning("DeepSeekEnricher: 无返回内容（可能被过滤），返回空标签。")
+            logger.warning("DeepSeekEnricher: no content returned, possibly filtered; returning empty tags.")
             return []
         return _parse_tags(choice.message.content, max_tags=self.max_tags)

@@ -1,117 +1,184 @@
-# Task2 结果报告 — 扩充训练集修复人像误报（covariate shift）
+# Task 2: expanding the training set to fix person-driven false triggers
 
-> **Summary (EN).** The one data intervention that worked. Adding 558 non-office
-> people-without-screen negatives halves person-driven false triggers on a fixed held-out
-> probe (51% → ~24% at matched recall) and Pareto-dominates the previous model across the
-> whole false-positive/recall curve. The apparent "over-correction" seen at the old fixed
-> threshold was a re-calibration artefact: the new model's score distribution shifted down.
-> Honest cost recorded alongside: 5-seed test F1 0.757 → 0.734.
+Covariate shift. 2026-06-24. Model: `gatekeeper_task2_mvp` (5 seeds plus a single-seed
+deployment model).
 
-日期：2026-06-24　模型：`gatekeeper_task2_mvp`（5-seed + 单 seed 部署模型）
+## 0. Conclusion
 
-## 0. 一句话结论
-**修复成功，且是"帕累托占优"式的成功，但需配套两个动作：重标部署阈值 + 接受一个小的 test-F1 口径回退。**
-在 held-out 探针上，新模型在**相同召回下把人像误报砍掉一半多**（51%→~24%），或**相同误报下召回 +31pp**——
-即新模型在"探针 FP vs 有人+有屏召回"权衡曲线上**全程压住旧模型**。先前在固定旧阈值 0.55 处看到的
-"召回从 61%→47% 的矫枉过正"是**阈值未重标的假象**（新模型分数分布整体下移），重标到 ~0.45–0.50 即消失。
-唯一诚实的保留项：5-seed **test F1 0.757→0.734（−0.023）**、FN 0.230→0.290 略升（test 集本身因补负例而改变，非严格可比）。
+The fix worked, and it worked in the strong sense of Pareto dominance, but it needs two things
+alongside it: the deployment threshold has to be re-calibrated, and a small regression in the
+test-F1 measurement has to be accepted.
 
-## 1. 做了什么（数据）
-- 三桶下载（导师指定对比组合 + 防矫枉过正探针）：
-  - **A 人/无屏负例**：16 关键词 ×35，净 **+560** → `data/raw/negative_clean/`（label 0）。偏非办公日常实景（街头/市场/通勤/家居/运动/服务/户外/看台/车厢）。
-  - **B 屏/无人正例**：9 关键词 ×28，净 **+131**（120 被全局 ID 去重跳过=与既有正例同图，正确不入）→ `data/raw/positive/`（label 1）。
-  - **C 人+有屏 held-out 探针**：6 关键词 ×18，净 **+51** → `data/probe_person_screen/`（**绝不进训练**）。
-- **防泄漏（硬门槛，全过）**：
-  - 新写 `scripts/guard_probe_overlap.py`：训练图 × 两个探针目录 ID+感知双查。
-    发现 **2 张**新负例与 held-out `probe_person_noscreen` 撞 Pexels-ID（13200581、36299324），
-    已 **quarantine（移动到 `data/_quarantine_task2/`，不删除）**；复查 **0 重叠**。
-  - `check_leakage.py`（去重池 2440 张）：跨 split 近重复 **0 对**、split 内 **0 对**。
-  - 探针测时再做一道 ID+感知核对：两个探针对训练池**泄漏 0**。
-- 数据量变化（去重 + 同一收窄边界后）：
+On the held-out probe, the new model cuts person-driven false triggers by more than half at
+matched recall (51% to about 24%), or equivalently gains 31 percentage points of recall at
+matched false-positive rate. It sits below the old model at every point on the "probe FP versus
+people-plus-screen recall" curve.
 
-  | 池 | 基线 v4 | task2 | Δ |
-  |---|---|---|---|
-  | 去重训练池 | 1752 | **2440** | +688 |
-  | 负例(neg_clean+neg_noise) | 829 | **1387** | **+558（核心修复）** |
-  | 正例 | 923 | 1053 | +130 |
+The apparent over-correction seen earlier at the old fixed threshold of 0.55, where recall
+seemed to drop from 61% to 47%, was an artefact of not re-calibrating: the new model's score
+distribution shifted downward as a whole. Re-calibrating to roughly 0.45–0.50 makes it
+disappear.
 
-  收窄排除子类沿用基线：`cosmetic_packaging_closeup, grocery_product_label, product_packaging_text, smartphone_apps_home_screen, tv_streaming_menu_screen`。
+The one honest reservation: 5-seed test F1 goes from 0.757 to 0.734 (−0.023) and FN rises from
+0.230 to 0.290. The test set itself changed when the negatives were added, so this is not a
+strictly like-for-like comparison.
 
-## 2. 头条：人像误报（探针 `probe_person_noscreen`，235 张，GT=不记，int8 部署口径）
+## 1. What was done to the data
 
-| 阈值 | FP 旧(v4) | FP 新(task2) | Δ |
+Three download buckets — the comparison the advisor specified, plus a probe to catch
+over-correction.
+
+- Bucket A, people without screens, negative. 16 keywords x 35, net +560, into
+  `data/raw/negative_clean/` (label 0). Deliberately non-office everyday scenes: street,
+  market, commute, home, sport, service, outdoors, stands, train carriages.
+- Bucket B, screens without people, positive. 9 keywords x 28, net +131. 120 were skipped by
+  global ID dedup because they were the same image as an existing positive, which is correct.
+  Into `data/raw/positive/` (label 1).
+- Bucket C, people plus screen, held-out probe. 6 keywords x 18, net +51, into
+  `data/probe_person_screen/`. Never enters training.
+
+Leakage control, treated as a hard gate and fully passed:
+
+- New script `scripts/guard_probe_overlap.py` cross-checks training images against both probe
+  directories by ID and by perceptual hash. It found 2 new negatives colliding with the
+  held-out `probe_person_noscreen` by Pexels ID (13200581 and 36299324). Those were
+  quarantined by moving them to `data/_quarantine_task2/` rather than deleted, and the
+  re-check reports 0 overlap.
+- `check_leakage.py` over the 2440-image deduplicated pool reports 0 cross-split near-duplicate
+  pairs and 0 within-split pairs.
+- At probe time, a further ID and perceptual check confirms 0 leakage from either probe into
+  the training pool.
+
+Dataset size after dedup, under the same narrowed label boundary:
+
+| Pool | Baseline v4 | task2 | Δ |
 |---|---|---|---|
-| 0.50 | 53.6% | **23.8%** | −29.8pp |
-| 0.55（旧部署点） | 51.1% | **21.7%** | −29.4pp |
+| Deduplicated training pool | 1752 | 2440 | +688 |
+| Negatives (neg_clean + neg_noise) | 829 | 1387 | +558, the core fix |
+| Positives | 923 | 1053 | +130 |
+
+Excluded subclasses carry over from the baseline: `cosmetic_packaging_closeup,
+grocery_product_label, product_packaging_text, smartphone_apps_home_screen,
+tv_streaming_menu_screen`.
+
+## 2. Headline: person-driven false triggers
+
+Probe `probe_person_noscreen`, 235 images, ground truth "do not record", int8 deployment
+measurement.
+
+| Threshold | FP old (v4) | FP new (task2) | Δ |
+|---|---|---|---|
+| 0.50 | 53.6% | 23.8% | −29.8pp |
+| 0.55 (old deployment point) | 51.1% | 21.7% | −29.4pp |
 | 0.70 | 37.0% | 11.1% | −25.9pp |
 
-> 旧基线 51.1% 与导师所述 ~51% 吻合（已在动数据前用同一脚本锁定）。
+The old baseline of 51.1% matches the roughly 51% the advisor described. It was locked in with
+the same script before any data was touched.
 
-## 3. "矫枉过正"自检（探针 `probe_person_screen`，51 张，GT=记，int8）——召回（=判"记"比例）
+## 3. Over-correction check
 
-| 阈值 | 召回 旧(v4) | 召回 新(task2) |
+Probe `probe_person_screen`, 51 images, ground truth "record", int8. Recall here means the
+fraction judged as record.
+
+| Threshold | Recall old (v4) | Recall new (task2) |
 |---|---|---|
-| 0.50 | 66.7% | **60.8%** |
+| 0.50 | 66.7% | 60.8% |
 | 0.55 | 60.8% | 47.1% |
 | 0.45 | 74.5% | 64.7% |
 
-固定 0.55 看，新模型召回 61%→47% 像是"见人就忽略"。但这是**阈值假象**——见 §4。
+Read at a fixed 0.55, the new model's recall dropping from 61% to 47% looks like it has learned
+to ignore anything with a person in it. That reading is a threshold artefact. See section 4.
 
-## 4. 关键：权衡曲线（held-out，公平对比）—— 新模型帕累托占优
-新模型分数分布整体下移（val F1 最优阈值由 0.55 降到 ~0.35–0.50），故必须**按新模型重标阈值**再比。
-等价工作点对比（int8）：
+## 4. The trade-off curve, compared fairly
 
-- **相同召回 60.8%**：旧需 @0.55 → 探针 FP **51.1%**；新只需 @0.49 → 探针 FP **24.7%**。→ 同召回，FP 砍半还多。
-- **相同 FP 51%**：旧 @0.55 召回 60.8%；新 @0.22 召回 **92.2%**。→ 同 FP，召回 +31pp。
-- 扫描全程：每个阈值上 `FP_新 ≪ FP_旧`。
+The new model's score distribution shifted down as a whole — the val-F1-optimal threshold moved
+from 0.55 to roughly 0.35–0.50 — so the models must be compared at re-calibrated thresholds.
 
-→ **新模型在"探针 FP vs 有人+有屏召回"曲线上全程占优**。§3 的"召回回退"仅因沿用了旧阈值 0.55。
+Equivalent operating points, int8:
 
-推荐部署阈值（在 **val** 上重标，非在探针上拟合）：val F1 在 0.35–0.50 平台最高（@0.50 F1 0.733 / @0.55 0.705）。
-取 **~0.45–0.50**：探针 FP ~24–27%（↓from 51%）且有人+有屏召回 ~61–65%（≥ 旧 60.8%）。**此时三条成功标准同时满足。**
+- At matched recall of 60.8%: the old model needs threshold 0.55 and gives probe FP 51.1%; the
+  new model needs only 0.49 and gives probe FP 24.7%. Same recall, less than half the false
+  positives.
+- At matched FP of 51%: the old model at 0.55 gives recall 60.8%; the new model at 0.22 gives
+  recall 92.2%. Same FP, 31 percentage points more recall.
+- Across the whole sweep, the new model's FP is below the old model's at every threshold.
 
-## 5. test 集（5-seed 去重重切分，阈值 0.5）—— 诚实口径
+The new model therefore dominates the old one along the entire probe-FP versus
+people-plus-screen-recall curve. The recall regression in section 3 exists only because the old
+threshold of 0.55 was carried over unchanged.
 
-| 指标 | 基线 v4 | task2 | Δ |
+Recommended deployment threshold, re-calibrated on val rather than fitted on the probe: val F1
+peaks on a plateau between 0.35 and 0.50 (0.733 at 0.50, 0.705 at 0.55). Taking roughly
+0.45–0.50 gives probe FP around 24–27%, down from 51%, with people-plus-screen recall around
+61–65%, at or above the old 60.8%. All three success criteria hold simultaneously at that
+point.
+
+## 5. Test set, stated honestly
+
+5-seed deduplicated re-split, threshold 0.5.
+
+| Metric | Baseline v4 | task2 | Δ |
 |---|---|---|---|
-| F1 | 0.7568 ± 0.0123 | **0.7343 ± 0.0248** | **−0.0225** |
+| F1 | 0.7568 ± 0.0123 | 0.7343 ± 0.0248 | −0.0225 |
 | recall | 0.7698 | 0.7095 | −0.060 |
 | FN rate | 0.2302 | 0.2905 | +0.060 |
-| FP rate | 0.2905 | **0.1667** | −0.124 |
+| FP rate | 0.2905 | 0.1667 | −0.124 |
 | precision | 0.7527 | 0.7652 | +0.013 |
 | accuracy | 0.7411 | 0.7800 | +0.039 |
 
-**诚实说明**：test F1 小幅回退 0.023、FN 略升——这是"用 FP 换 FN"的再平衡。但：
-(a) test 集本身因补了 558 负例而组成改变（负例占比上升），与基线 test 非严格同口径，不能直接等同比较；
-(b) 公平的同集 held-out 探针（§2/§4）显示新模型占优；
-(c) 回退幅度 ~1–2 个基线 std，且 test FP 显著改善。
-→ 综合判断：**不构成"test 退化"的否决项，但必须如实标注这条口径回退，不粉饰。**
+Test F1 slips by 0.023 and FN rises slightly. This is a rebalancing that trades FP for FN.
+Three qualifications apply. The test set itself changed composition when 558 negatives were
+added, so the negative share rose and it is not strictly the same measurement as the baseline's
+test set. The fair comparison, on the fixed held-out probes in sections 2 and 4, shows the new
+model ahead. And the regression is about one to two baseline standard deviations while test FP
+improves substantially.
 
-## 6. int8 导出验证（`gatekeeper_task2_mvp_int8.tflite`）
-- 算子：11 个全部命中 TFLM 白名单 ✓
-- dtype：17 int8 + 5 int32，**0 个 float32 内部张量**（全 int8）✓
-- 体积：int8 文件 32.4KB，权重 24.3KB（= 24,874 参数 ×1B，与历史估算吻合）✓
-- 量化掉点：test ΔF1 −0.006(@0.5) / −0.014(@0.55)，可接受 ✓
+Taken together this is not grounds for rejecting the change, but the regression has to be
+labelled accurately rather than glossed over.
 
-## 7. 成功标准逐条裁定
-| 标准 | 结论 |
+## 6. int8 export verification
+
+`gatekeeper_task2_mvp_int8.tflite`:
+
+- Operators: all 11 are on the TFLite Micro whitelist.
+- Dtypes: 17 int8 and 5 int32 tensors, with zero float32 internal tensors. Fully int8.
+- Size: 32.4 KB file, 24.3 KB of weights, matching 24,874 parameters at 1 byte each and
+  agreeing with the earlier estimate.
+- Quantisation loss: test ΔF1 of −0.006 at threshold 0.5 and −0.014 at 0.55. Acceptable.
+
+## 7. Success criteria, decided one by one
+
+| Criterion | Verdict |
 |---|---|
-| 探针 FP 从 ~51% 显著下降 | ✅ **达成**：同召回下 51%→~24%（−27pp）；旧阈值处 51.1%→21.7% |
-| 原 test F1/FN/FP 不退 | ⚠️ **部分**：test FP 大降，但 F1 −0.023、FN +0.06（test 集已变，口径回退，需标注） |
-| 有人+有屏召回保持 | ✅ **达成（重标阈值后）**：@0.45–0.50 召回 61–65% ≥ 旧 60.8%；@旧 0.55 则回退（阈值假象） |
+| Probe FP drops substantially from about 51% | Met. 51% to about 24% at matched recall (−27pp); at the old threshold, 51.1% to 21.7% |
+| Original test F1/FN/FP do not regress | Partly. Test FP improves a lot, but F1 is −0.023 and FN +0.06. The test set has changed, so this is a measurement regression that must be labelled |
+| People-plus-screen recall holds up | Met, after re-calibration. Recall is 61–65% at 0.45–0.50, at or above the old 60.8%. At the old 0.55 it regresses, which is the threshold artefact |
 
-## 8. 残留风险 / 局限（不藏）
-1. **人眼 QC 未做**：560 张新负例未逐张确认无"可读屏幕"混入（自动无法可靠判别）。已生成
-   `data/processed/task2_qc_montages/*.png`（每子类 9 图拼图）供人工抽查；关键词刻意避开办公/会议/教室以降风险。
-2. **person+screen 探针仅 51 张**（部分关键词被全局去重大量跳过），召回 95%CI 约 ±14pp，结论方向可信但点值噪声大。
-3. **部署阈值尚未提交**：本报告只给推荐区间，未改任何部署配置/README/模型选型——待定。
-4. **未做**：把 task2_mvp 提为顶层最佳、ESP32 真机验证、test 集口径对齐重测。
+## 8. Remaining risks and limitations
 
-## 9. 产物
-- 模型：`models/gatekeeper_task2_mvp.keras` / `_float32.tflite` / `_int8.tflite`（gitignored）
-- 数据清单：`data/processed/manifest.csv`、`manifest_dedup.csv`、`dedup_{train,val,test}.csv`
-- 指标：`docs/results/variance_results_task2.json`、`docs/probes/probe_fp_{before,after}.md`、
-  `probe_personscreen_{before,after}.md`、`leakage_task2_dedup.csv`
-- 脚本（新）：`scripts/guard_probe_overlap.py`、`scripts/probe_fp_test.py`（自审计分支引入）、三个 `keywords_task2_*.json`
-- QC 拼图：`data/processed/task2_qc_montages/`
-- quarantine：`data/_quarantine_task2/`（2 张撞探针的负例，移动保留）
+1. No manual QC. The 560 new negatives have not been checked one by one for readable screens
+   creeping in, which cannot be judged reliably by an automatic check.
+   `data/processed/task2_qc_montages/*.png` holds a 9-image montage per subclass for spot
+   checking. The keywords deliberately avoid office, meeting and classroom scenes to reduce the
+   risk.
+2. The person-plus-screen probe is only 51 images, because global dedup skipped a lot of what
+   some keywords returned. Recall has a 95% confidence interval of roughly ±14pp, so the
+   direction of the conclusion is sound but individual point values are noisy.
+3. The deployment threshold has not been committed. This report gives a recommended range only;
+   no deployment configuration, README or model selection was changed. Still to be decided.
+4. Not done: promoting task2_mvp to top-level best, ESP32 on-device verification, and
+   re-measuring the test set under an aligned protocol.
+
+## 9. Artifacts
+
+- Models: `models/gatekeeper_task2_mvp.keras`, `_float32.tflite`, `_int8.tflite` (gitignored).
+- Data manifests: `data/processed/manifest.csv`, `manifest_dedup.csv`,
+  `dedup_{train,val,test}.csv`.
+- Metrics: `docs/results/variance_results_task2.json`,
+  `docs/probes/probe_fp_{before,after}.md`, `probe_personscreen_{before,after}.md`,
+  `leakage_task2_dedup.csv`.
+- New scripts: `scripts/guard_probe_overlap.py`, `scripts/probe_fp_test.py`, and three
+  `keywords_task2_*.json` files.
+- QC montages: `data/processed/task2_qc_montages/`.
+- Quarantine: `data/_quarantine_task2/`, holding the 2 negatives that collided with the probe.
+  Moved, not deleted.

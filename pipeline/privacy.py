@@ -1,7 +1,9 @@
-"""隐私：raw_image_policy 落地。
+"""Privacy: implementing raw_image_policy.
 
-默认 "delete"：OCR 完成、payload 打包后立即删除原始高清帧（隐私优先）。
-"cache"：移入短期缓存目录（cache_ttl_seconds 仅登记，本阶段不起后台清理线程）。
+The default is "delete": once OCR is done and the payload is packaged, the original
+full-resolution frame is deleted immediately. Privacy comes first.
+"cache" moves it into a short-term cache directory instead. cache_ttl_seconds is recorded but
+no background cleanup thread runs in this phase.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from . import config
 def apply_raw_image_policy(
     frame_path: Path, policy: str, cache_dir: Path
 ) -> Optional[Path]:
-    """按策略处理原始帧。返回帧的最终路径（delete → None）。"""
+    """Apply the policy to the raw frame and return its final path, or None when deleted."""
     frame_path = Path(frame_path)
     if policy == config.POLICY_DELETE:
         if frame_path.exists():
@@ -29,4 +31,4 @@ def apply_raw_image_policy(
         if frame_path.exists():
             shutil.move(str(frame_path), str(dest))
         return dest
-    raise ValueError(f"raw_image_policy 非法: {policy!r}")
+    raise ValueError(f"invalid raw_image_policy: {policy!r}")

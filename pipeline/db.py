@@ -1,9 +1,11 @@
-"""SQLite 存储层：schema + 增删查 + pending 队列。
+"""SQLite storage: schema, CRUD and the pending queue.
 
-设计要点：
-- 单文件 SQLite（本地优先、离线）。
-- 一个 CardStore 封装连接与所有 SQL；外部只见 MemoryCard 对象，不见 SQL。
-- pending 队列不是单独的表，而是 status='pending' 的行；这样"补 tags"就是原地 UPDATE。
+Design notes:
+- A single-file SQLite database, in keeping with local-first and offline operation.
+- One CardStore wraps the connection and all the SQL. Callers see MemoryCard objects and never
+  SQL.
+- The pending queue is not a separate table, it is simply the rows with status='pending', which
+  makes backfilling tags an in-place UPDATE.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ CREATE TABLE IF NOT EXISTS memory_cards (
     timestamp          TEXT    NOT NULL,
     trigger_confidence REAL    NOT NULL,
     ocr_text           TEXT    NOT NULL,
-    tags               TEXT,              -- JSON 数组；NULL = 未生成
+    tags               TEXT,              -- JSON array; NULL means not generated yet
     raw_image_policy   TEXT    NOT NULL DEFAULT 'delete',
     status             TEXT    NOT NULL DEFAULT 'pending',
     created_at         TEXT    NOT NULL,
@@ -33,12 +35,13 @@ CREATE INDEX IF NOT EXISTS idx_cards_created ON memory_cards(created_at);
 
 
 class CardStore:
-    """memory card 的 SQLite 仓库。用作 context manager 或手动 close()。"""
+    """SQLite repository for memory cards. Use as a context manager, or close() manually."""
 
     def __init__(self, db_path: Path | str):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False：CLI/测试里偶尔跨线程；本阶段单写者，够用。
+        # check_same_thread=False because the CLI and tests occasionally cross threads. There
+        # is a single writer in this phase, so this is sufficient.
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON;")
@@ -60,7 +63,7 @@ class CardStore:
 
     # ---- Create ----
     def insert(self, card: MemoryCard) -> int:
-        """插入一张卡片，返回分配的 id（同时回填 card.id）。"""
+        """Insert a card and return the assigned id, also writing it back to card.id."""
         row = card.to_row()
         cur = self._conn.execute(
             """
@@ -92,7 +95,8 @@ class CardStore:
         return [MemoryCard.from_row(r) for r in self._conn.execute(sql)]
 
     def list_pending(self) -> list[MemoryCard]:
-        """待处理队列：status='pending'，按入库时间升序（先进先补）。"""
+        """The pending queue: rows with status='pending', oldest first, so they are
+        backfilled in arrival order."""
         cur = self._conn.execute(
             "SELECT * FROM memory_cards WHERE status = ? ORDER BY created_at ASC, id ASC",
             (config.STATUS_PENDING,),
@@ -100,9 +104,10 @@ class CardStore:
         return [MemoryCard.from_row(r) for r in cur]
 
     def search(self, keyword: str, limit: Optional[int] = None) -> list[MemoryCard]:
-        """按关键词搜 ocr_text 或 tags（大小写不敏感，子串匹配）。
+        """Search ocr_text or tags by keyword, case-insensitive substring match.
 
-        tags 以 JSON 文本存储，直接 LIKE 足够本阶段演示（无需全文索引）。
+        tags is stored as JSON text, and a plain LIKE is enough for this phase; no full-text
+        index is needed.
         """
         like = f"%{keyword}%"
         sql = (
@@ -127,10 +132,11 @@ class CardStore:
 
     # ---- Update ----
     def enrich_card(self, card_id: int, tags: Iterable[str]) -> MemoryCard:
-        """回填 tags：写 tags、置 status=done、填 enriched_at。返回更新后的卡片。"""
+        """Backfill tags: write tags, set status to done, fill in enriched_at, and return the
+        updated card."""
         card = self.get(card_id)
         if card is None:
-            raise KeyError(f"memory card id={card_id} 不存在")
+            raise KeyError(f"memory card id={card_id} does not exist")
         card.tags = list(tags)
         card.status = config.STATUS_DONE
         card.enriched_at = utc_now_iso()

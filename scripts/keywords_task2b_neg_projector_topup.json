@@ -1,7 +1,7 @@
 {
-  "_comment": "Task2b 补量：empty_projector_screen_white_wall 只下到 9 张，而『空白投影屏/白墙投影面』是误判核心场景（有用文字屏正类的硬负例），不能太少。用近义词补到该概念合计 ~25-30 张。",
-  "_label": "category=negative_clean → label 0。新 slug 进 data/raw/negative_clean（训练负例）；本阶段【不】跑 prepare_dataset。",
-  "_design": "刻意带 blank/white/no content，压低混入含 PPT/文字的投影画面（=正类）的概率；仍需人眼 QC（已纳入 qc_prefilter 扫描范围）。",
+  "_comment": "Task 2b top-up: empty_projector_screen_white_wall only reached 9 images, and blank projector screens and projection walls are a core confusion case, being the hard negative for the useful-text-screen positive class. Synonyms bring that concept to roughly 25-30 images in total.",
+  "_label": "category=negative_clean, so label 0. New slugs go into data/raw/negative_clean as training negatives. This phase does not run prepare_dataset.",
+  "_design": "Deliberately carries blank, white and no content, to reduce the chance of pulling in projected images containing slides or text, which would be positives. Manual QC is still required; these are covered by the qc_prefilter scan.",
   "_usage": "python3 scripts/download_images.py --config scripts/keywords_task2b_neg_projector_topup.json --output-root data/raw",
   "negative_clean": [
     {"query": "white projector screen mounted wall blank", "count": 12},

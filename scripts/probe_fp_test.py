@@ -1,37 +1,53 @@
 #!/usr/bin/env python3
-"""探针集误触发测试 —— 直接量「真实有人、无屏幕文字」场景下守门员的误触发率(FP)。
+"""Probe false-trigger test: measure the gatekeeper's false-positive rate directly on real
+"people present, no screen text" scenes.
 
-承接 person-bias 审计的结论：数据集层面正/负含人率几乎相等（gap≈0），「正例更常带人」
-的数量失衡**不成立**。但这不排除"对着真人就触发"——可能是**协变量/语境偏移**：训练负类
-里的人主要是干净影棚人像(`people_portrait`)，覆盖不到杂乱实景里的人。本脚本**直接量症状**：
-把守门员跑在一个「有人、无屏幕文字」的探针集上，所有图按定义都该「不记(=0)」，
-任何「记(=1)」都是 FP。报告部署阈值(及更高阈值)下的 FP 率。
+Background from the person-bias audit: at the dataset level, positives and negatives contain
+people at almost the same rate (gap about 0), so the "positives more often contain people"
+count imbalance does not hold. That does not rule out firing at real people, though. The
+likelier explanation is covariate or context shift: the people in the training negatives are
+mostly clean studio portraits (`people_portrait`), which do not cover people in cluttered real
+scenes. This script measures the symptom directly. It runs the gatekeeper over a probe set of
+"people present, no screen text" images, all of which are do-not-record (0) by definition, so
+any record (1) is a false positive, and reports the FP rate at the deployment threshold and
+above.
 
-为什么这样能区分两种病因（见审计 notebook 第 5 节）：
-- 若探针 FP **高** 而 person-count gap≈0 ⇒ **协变量/语境偏移**（影棚人像不覆盖实景人），
-  解法是**增负类人像的场景多样性**，不是单纯增量。
-- 若探针 FP **低** ⇒ 线上"对着人就触发"的印象被混淆了（阈值/光照/相机管线），去那边查。
+Why this distinguishes the two causes:
+- If probe FP is high while the person-count gap is about 0, it is covariate or context shift
+  (studio portraits not covering real-scene people). The fix is more scene diversity in the
+  people negatives, not simply more of them.
+- If probe FP is low, then the impression that it fires whenever a person is in frame is
+  confounded by something else (threshold, lighting, camera pipeline). Look there instead.
 
-做四件事：
-  1. 读探针集（任意分辨率的真实照片；若目录空则打印投喂规格并退出）。
-  2. 防泄漏：用 Pexels-ID(文件名) + 感知哈希(pHash+像素相关，复用 check_leakage 同口径)
-     双重核对，剔除任何与 train/val/test 撞图/近重复的探针，保证 FP 测在"干净探针"上。
-  3. 对干净探针跑 **keras(float)** 与 **int8(.tflite)** 两个守门员，报告各阈值的 FP 率
-     （部署阈值 0.55 + argmax 0.5 + 两个更紧的 0.7/0.9）。GT 全 0，FP 率 = 判「记」比例。
-  4. 存 FP 案例拼图 + 对若干 FP 图做 Grad-CAM（看热力是否真落在人身上 —— FP 样本上的
-     热力才是捷径的硬证据，比正例上的更说明问题）。写 docs/probes/probe_fp_audit.md。
+It does four things:
+  1. Read the probe set (real photographs at any resolution). If the directory is empty, print
+     the collection spec and exit.
+  2. Leakage control: cross-check by Pexels ID from the filename and by perceptual hash (pHash
+     plus pixel correlation, same criteria as check_leakage), removing any probe image that
+     collides with or near-duplicates train, val or test, so the FP rate is measured on a clean
+     probe set.
+  3. Score the clean probe set with both gatekeepers, keras (float) and int8 (.tflite), and
+     report the FP rate at each threshold (deployment 0.55, argmax 0.5, and two tighter ones at
+     0.7 and 0.9). Ground truth is all 0, so FP rate is simply the fraction judged as record.
+  4. Save a montage of false-positive cases plus Grad-CAM for a few of them, to see whether the
+     heat actually falls on people. Heat on FP samples is the hard evidence of a shortcut, more
+     so than heat on positives. Writes docs/probes/probe_fp_audit.md.
 
-口径选择（写进注释，便于审计）：
-- 探针图是任意分辨率，故两条评估都用**部署预处理**：cv2 灰度 → resize 96×96 INTER_AREA
-  → /255（int8 再按模型量化参数量化）。这正是我们想量的"部署时行为"。int8 直接复用
-  `hardware/infer.py` 的 load_model/predict（与树莓派端口径唯一）；keras 用同样的灰度+缩放。
-- **不重训、不改数据**。探针集与所有产物按 .gitignore 留在 data/ 下，不入库。
+Measurement choices, written down so the run can be audited:
+- Probe images are at arbitrary resolution, so both evaluations use deployment preprocessing:
+  cv2 greyscale, resize to 96x96 with INTER_AREA, divide by 255, and for int8 quantise using
+  the model's own parameters. That is exactly the deployment-time behaviour we want to measure.
+  The int8 path reuses load_model/predict from `hardware/infer.py` so it matches the Pi
+  exactly; keras uses the same greyscale and resize.
+- Nothing is retrained and no data is changed. The probe set and all outputs stay under data/
+  and are excluded by .gitignore.
 
-依赖：opencv、numpy、pandas、tensorflow（keras + tf.lite 回退）。复用 scripts/check_leakage.py
-的 phash64/popcount64 与 hardware/infer.py 的 int8 运行时，无新增依赖。
+Dependencies: opencv, numpy, pandas, tensorflow (keras plus a tf.lite fallback). Reuses
+phash64/popcount64 from scripts/check_leakage.py and the int8 runtime from hardware/infer.py.
+Adds no new dependency.
 
-示例：
-  .venv/bin/python scripts/probe_fp_test.py                 # 目录空→打印投喂规格
+Examples:
+  .venv/bin/python scripts/probe_fp_test.py                 # empty directory: print the collection spec
   .venv/bin/python scripts/probe_fp_test.py --probe-dir data/probe_person_noscreen
   .venv/bin/python scripts/probe_fp_test.py --no-gradcam --thresholds 0.5,0.55,0.7,0.9
 """
@@ -49,55 +65,62 @@ import cv2
 import numpy as np
 import pandas as pd
 
-# 复用泄漏检查的哈希实现（同 dedup_resplit 的做法），保证去重/泄漏判据全仓一致。
+# Reuse the leakage check's hash implementation, as dedup_resplit does, so the dedup and
+# leakage criteria stay identical across the whole repository.
 from check_leakage import phash64, popcount64  # noqa: E402
 
 INPUT_SIZE = 96
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 
-# 部署工作点：v4_mvp 调过的阈值 ~0.55（见 models/README）。对 p(记) 卡阈值。
+# Deployment operating point: the threshold tuned for v4_mvp, about 0.55 (see models/README).
+# The threshold is applied to p(record).
 DEPLOY_THRESHOLD = 0.55
 
 
-# ───────────────────────────── 投喂规格 ─────────────────────────────
+# ----------------------------- collection spec -----------------------------
 PROBE_SPEC = f"""\
-━━━━━━━━━━━━━━━━━━━━━━━━ 探针集投喂规格 ━━━━━━━━━━━━━━━━━━━━━━━━
-目标：测「真实有人、无屏幕文字」时守门员的误触发率。每张图按定义都该「不记」。
+======================== Probe set collection spec ========================
+Goal: measure the gatekeeper's false-trigger rate on real "people present, no screen text"
+scenes. Every image is do-not-record by definition.
 
-目录结构（在 data/ 下，已 gitignored）：
+Directory layout (under data/, already gitignored):
   data/probe_person_noscreen/
-      *.jpg / *.png ...            # 平铺即可；也可按场景建子目录，脚本递归扫描
+      *.jpg / *.png ...            # flat is fine; subdirectories per scene also work, the scan recurses
 
-数量：建议 **~200 张**（最少 ~80 张才有稳定的 FP 率；200 张时 FP 的 95%CI 约 ±3–4pp）。
+Count: aim for about 200 images. Below roughly 80 the FP rate is not stable; at 200 the 95%
+confidence interval is around +/- 3-4 percentage points.
 
-内容（关键：要与训练负类 people_portrait 的"干净影棚人像"在性质上拉开）：
-  ✓ 会议室里有人（但**没有**可读的投影/屏幕文字）
-  ✓ 办公室里的人在工作（屏幕**不可读**或不入镜）
-  ✓ 咖啡馆 / 居家 / 街头 / 合影等杂乱实景里的人
-  ✓ 多人、半身/坐姿、背景杂乱、自然光、非摆拍
-  ✗ 不要影棚干净人像（那是 people_portrait 负类，已覆盖）
-  ✗ 不要任何带可读屏幕/白板/文档/PPT 文字的图（那会变成"该记"，污染探针）
+Content. The point is to differ in character from the clean studio portraits in the
+people_portrait training negatives:
+  Include  people in a meeting room, with no readable projector or screen text
+  Include  people working in an office, with the screen unreadable or out of frame
+  Include  people in cluttered real scenes: cafes, homes, streets, group photos
+  Include  multiple people, half-body or seated, busy backgrounds, natural light, unposed
+  Exclude  clean studio portraits, which are the people_portrait negatives and already covered
+  Exclude  anything with readable screen, whiteboard, document or slide text, which would make
+           the image a positive and contaminate the probe
 
-从 Pexels 取（可选）：
-  1. 用现成 scripts/download_images.py + 一个探针配置（query 例：
-     "people meeting room","office team working","friends cafe group",
-     "people working laptop office","group people indoor candid"），输出到
-     data/probe_person_noscreen/。download_images.py 自带按 Pexels-ID 全局去重。
-  2. **本脚本会再做一道防泄漏**：按 Pexels-ID(文件名) + 感知哈希双重核对，
-     自动剔除任何与 train/val/test 撞图/近重复的探针——所以即便 query 命中了
-     训练里出现过的图也不会污染 FP（会被排除并报告）。
+Fetching from Pexels (optional):
+  1. Use the existing scripts/download_images.py with a probe config. Example queries:
+     "people meeting room", "office team working", "friends cafe group",
+     "people working laptop office", "group people indoor candid". Output to
+     data/probe_person_noscreen/. download_images.py already deduplicates globally by Pexels ID.
+  2. This script then applies a second leakage check, cross-referencing Pexels ID from the
+     filename and perceptual hash, and automatically removes any probe image that collides with
+     or near-duplicates train, val or test. So even if a query returns an image that appears in
+     training, it will not contaminate the FP rate; it is excluded and reported.
 
-放好图后重跑：
+Once the images are in place, re-run:
   .venv/bin/python scripts/probe_fp_test.py --probe-dir data/probe_person_noscreen
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+==========================================================================="""
 
-
-# ───────────────────────────── Pexels-ID 解析 ─────────────────────────────
+# ----------------------------- Pexels ID parsing -----------------------------
 def photo_ids(stem: str) -> set[str]:
-    """从文件名 stem 提取候选 Pexels 图片 id：长度≥6 的纯数字 token。
+    """Extract candidate Pexels image ids from a filename stem: numeric tokens of length 6+.
 
-    覆盖两种命名：raw `<slug>_<seq4>_<id>`（id 在末尾）与 processed
-    `<slug>_<seq4>_<id>_<hash8>`（id 在倒数第二段）。seq 为 4 位，<6 被排除。
+    Covers both naming schemes: raw `<slug>_<seq4>_<id>` with the id last, and processed
+    `<slug>_<seq4>_<id>_<hash8>` with the id second from last. seq is 4 digits, so the length
+    threshold of 6 excludes it.
     """
     return {t for t in re.split(r"[_\-.]", stem) if t.isdigit() and len(t) >= 6}
 
@@ -110,7 +133,7 @@ def manifest_id_set(manifest: Path) -> set[str]:
     return ids
 
 
-# ───────────────────────────── 感知哈希泄漏核对 ─────────────────────────────
+# ----------------------------- perceptual-hash leakage check -----------------------------
 def load_gray96(path: Path) -> np.ndarray | None:
     g = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if g is None:
@@ -121,7 +144,8 @@ def load_gray96(path: Path) -> np.ndarray | None:
 
 
 def build_manifest_index(manifest: Path, data_root: Path) -> dict:
-    """载入 manifest 全量 96×96 灰度，预算 pHash + 中心化向量 + 范数（供向量化像素相关）。"""
+    """Load the whole manifest as 96x96 greyscale and precompute pHash, centred vectors and
+    norms, so pixel correlation can be vectorised."""
     df = pd.read_csv(manifest)
     n = len(df)
     flats = np.zeros((n, INPUT_SIZE * INPUT_SIZE), np.float32)
@@ -137,7 +161,7 @@ def build_manifest_index(manifest: Path, data_root: Path) -> dict:
     centered = flats - flats.mean(axis=1, keepdims=True)
     norm = np.linalg.norm(centered, axis=1)
     if bad:
-        print(f"  [警告] manifest 有 {bad} 张读取失败（忽略）", file=sys.stderr)
+        print(f"  [warning] {bad} manifest images failed to load and were ignored", file=sys.stderr)
     return {
         "phashes": phashes,
         "centered": centered,
@@ -148,7 +172,8 @@ def build_manifest_index(manifest: Path, data_root: Path) -> dict:
 
 
 def perceptual_match(gray96: np.ndarray, idx: dict, phash_th: int, pixel_corr: float) -> dict | None:
-    """返回该探针图与 manifest 的最强近重复匹配（若达阈值），否则 None。"""
+    """Return the strongest near-duplicate match between this probe image and the manifest, if
+    one reaches the threshold, otherwise None."""
     ph = phash64(gray96)
     ham = popcount64(np.uint64(ph) ^ idx["phashes"])
     cand = np.nonzero(ham <= phash_th)[0]
@@ -166,10 +191,11 @@ def perceptual_match(gray96: np.ndarray, idx: dict, phash_th: int, pixel_corr: f
     return best
 
 
-# ───────────────────────────── 推理 ─────────────────────────────
+# ----------------------------- inference -----------------------------
 def keras_scores(model, grays: list[np.ndarray]) -> np.ndarray:
-    """对一批灰度图(任意分辨率)按部署口径预处理后批量推理，返回 p(记) 数组。"""
-    import tensorflow as tf  # 局部导入
+    """Preprocess a batch of greyscale images of any resolution under deployment rules, run
+    inference, and return the array of p(record)."""
+    import tensorflow as tf  # local import
     batch = np.zeros((len(grays), INPUT_SIZE, INPUT_SIZE, 1), np.float32)
     for i, g in enumerate(grays):
         r = cv2.resize(g, (INPUT_SIZE, INPUT_SIZE), interpolation=cv2.INTER_AREA)
@@ -178,17 +204,19 @@ def keras_scores(model, grays: list[np.ndarray]) -> np.ndarray:
     return probs[:, 1]
 
 
-# ── int8 运行时（自含）。口径严格复刻 hardware/infer.py 的部署预处理：
-#    灰度 → resize96 INTER_AREA → /255 → 按模型自带量化参数(scale,zero_point)量化成 int8；
-#    输出按输出量化参数 dequant 回概率，取 p(记)=softmax[1]。
-#    说明：infer.py 仅存在于 hardware/* 分支，故此处内联，保证本审计分支可独立运行；
-#    逻辑与之逐行等价，将来在含 infer.py 的分支可直接换成 `import infer`。
+# -- Self-contained int8 runtime. Reproduces the deployment preprocessing in hardware/infer.py
+#    exactly: greyscale, resize to 96 with INTER_AREA, divide by 255, then quantise to int8
+#    using the model's own scale and zero_point. The output is dequantised back to
+#    probabilities and p(record) is taken as softmax[1].
+#    infer.py only existed on the hardware branch, so the logic is inlined here to keep this
+#    audit runnable standalone. It is line-for-line equivalent and can be swapped for
+#    `import infer` wherever that module is available.
 def _make_interpreter(model_path: Path):
     try:
-        from ai_edge_litert.interpreter import Interpreter  # 树莓派推荐运行时
+        from ai_edge_litert.interpreter import Interpreter  # preferred runtime on the Pi
         return Interpreter(model_path=str(model_path))
     except ImportError:
-        import tensorflow as tf  # 笔记本回退，功能等价
+        import tensorflow as tf  # laptop fallback, functionally equivalent
         return tf.lite.Interpreter(model_path=str(model_path))
 
 
@@ -204,7 +232,7 @@ def int8_predict_one(interp, gray: np.ndarray) -> float:
     ind = interp.get_input_details()[0]
     outd = interp.get_output_details()[0]
     scale, zp = ind["quantization"]
-    if scale == 0:  # float 输入模型：直接喂 float
+    if scale == 0:  # float-input model: feed float directly
         q = x.reshape(1, INPUT_SIZE, INPUT_SIZE, 1).astype(np.float32)
     else:
         q = np.clip(np.round(x / scale + zp), -128, 127).astype(np.int8)
@@ -214,11 +242,12 @@ def int8_predict_one(interp, gray: np.ndarray) -> float:
     y = interp.get_tensor(outd["index"])[0]
     o_scale, o_zp = outd["quantization"]
     probs = (y.astype(np.float32) - o_zp) * o_scale if o_scale else y.astype(np.float32)
-    return float(probs[1])  # p(记)
+    return float(probs[1])  # p(record)
 
 
 def int8_scores(interp, grays: list[np.ndarray]) -> np.ndarray:
-    """传 2D 灰度（跳过色彩转换，内部自做 resize+量化），返回 p(记) 数组。"""
+    """Take 2D greyscale (skipping colour conversion; resize and quantisation happen inside)
+    and return the array of p(record)."""
     out = np.zeros(len(grays), np.float32)
     for i, g in enumerate(grays):
         out[i] = int8_predict_one(interp, g)
@@ -226,7 +255,7 @@ def int8_scores(interp, grays: list[np.ndarray]) -> np.ndarray:
 
 
 def fp_table(scores: np.ndarray, thresholds: list[float]) -> list[dict]:
-    """GT 全 0：FP 率 = 判「记」(score≥th) 的比例。"""
+    """Ground truth is all 0, so the FP rate is the fraction judged as record (score >= th)."""
     n = len(scores)
     rows = []
     for t in thresholds:
@@ -236,10 +265,11 @@ def fp_table(scores: np.ndarray, thresholds: list[float]) -> list[dict]:
     return rows
 
 
-# ───────────────────────────── Grad-CAM（FP 案例） ─────────────────────────────
+# ----------------------------- Grad-CAM on false-positive cases -----------------------------
 def gradcam_on(model_path: Path, items: list[tuple[str, np.ndarray, float]],
                out_dir: Path) -> dict:
-    """对 FP 案例做 Grad-CAM（block4_relu 对 p(记)）。items=[(name, gray, score)]。"""
+    """Grad-CAM over the false-positive cases: block4_relu with respect to p(record).
+    items is a list of (name, gray, score)."""
     try:
         os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
         import tensorflow as tf
@@ -272,15 +302,17 @@ def gradcam_on(model_path: Path, items: list[tuple[str, np.ndarray, float]],
             path = out_dir / f"gradcam_fp_{name}.png"
             cv2.imwrite(str(path), np.hstack([disp, over]))
             saved.append(path.name)
-        print(f"  Grad-CAM(FP): {len(saved)} 张 → {out_dir}（左原图/右热力；热力落在人身=捷径硬证据）")
+        print(f"  Grad-CAM (FP): {len(saved)} saved to {out_dir} "
+              "(original left, heatmap right; heat on people is hard evidence of a shortcut)")
         return {"ok": True, "saved": saved}
     except Exception as e:  # noqa: BLE001
-        print(f"  Grad-CAM 跳过：{type(e).__name__}: {e}")
+        print(f"  Grad-CAM skipped: {type(e).__name__}: {e}")
         return {"ok": False, "saved": [], "note": f"{type(e).__name__}: {e}"}
 
 
 def fp_montage(items: list[tuple[str, np.ndarray, float]], out_dir: Path, n: int) -> str | None:
-    """FP 案例拼图（部署阈值下判「记」的探针），每格标 p(记)。"""
+    """Montage of false-positive cases, meaning probe images judged as record at the deployment
+    threshold. Each cell is labelled with p(record)."""
     items = items[:n]
     if not items:
         return None
@@ -302,78 +334,99 @@ def fp_montage(items: list[tuple[str, np.ndarray, float]], out_dir: Path, n: int
     return path.name
 
 
-# ───────────────────────────── 报告文档 ─────────────────────────────
+# ----------------------------- report document -----------------------------
 def write_markdown(md_path: Path, results: dict | None, probe_dir: Path, out_dir: Path) -> None:
-    L = ["# 探针集误触发测试（probe FP audit）\n"]
-    L.append("> 直接量「真实有人、无屏幕文字」场景下守门员的误触发率(FP)。"
-             "每张探针图按定义都该「不记」，任何「记」都是 FP。**仅诊断，未重训、未改数据。**\n")
-    L.append("\n## 方法\n")
-    L.append(f"- 探针目录：`{probe_dir}/`（gitignored）。预处理=部署口径"
-             "（cv2 灰度→resize96 INTER_AREA→/255；int8 再量化）。\n")
-    L.append("- 防泄漏：Pexels-ID(文件名) + 感知哈希(pHash≤阈 且 像素相关≥阈，复用 "
-             "`check_leakage` 同口径) 双重核对，剔除与 train/val/test 撞图/近重复的探针。\n")
-    L.append("- 两个守门员：`keras(float)` 与 `int8(.tflite)`（自含 int8 运行时，口径复刻 "
-             "`hardware/infer.py` 部署预处理）。部署阈值 0.55，另列 0.5/0.7/0.9。\n")
+    L = ["# Probe false-trigger audit\n"]
+    L.append("> Measures the gatekeeper's false-trigger rate directly on real "
+             "\"people present, no screen text\" scenes. By definition every probe image should be "
+             "judged do-not-record, so any record is a false positive. Diagnostic only: nothing "
+             "was retrained and no data was changed.\n")
+    L.append("\n## Method\n")
+    L.append(f"- Probe directory: `{probe_dir}/` (gitignored). Preprocessing matches "
+             "deployment: cv2 greyscale, resize to 96 with INTER_AREA, divide by 255, then "
+             "quantise for int8.\n")
+    L.append("- Leakage control: a double check by Pexels ID from the filename and by "
+             "perceptual hash (pHash within threshold and pixel correlation above threshold, "
+             "reusing the same criteria as `check_leakage`), removing any probe image that "
+             "collides with or near-duplicates train, val or test.\n")
+    L.append("- Two gatekeepers are scored: `keras (float)` and `int8 (.tflite)`, the latter "
+             "with a self-contained int8 runtime reproducing the deployment preprocessing in "
+             "`hardware/infer.py`. Deployment threshold 0.55; 0.5, 0.7 and 0.9 are also "
+             "listed.\n")
 
     if results is None:
-        L.append("\n## 投喂规格（探针目录当前为空）\n")
+        L.append("\n## Collection spec (the probe directory is currently empty)\n")
         L.append("```\n" + PROBE_SPEC + "\n```\n")
-        L.append("\n## 结果\n_待投喂探针图后重跑本脚本生成。_\n")
+        L.append("\n## Results\n_Generated once probe images are in place and this script is re-run._\n")
         md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text("".join(L), encoding="utf-8")
         return
 
     lk = results["leakage"]
-    L.append("\n## 1. 防泄漏核对\n")
-    L.append(f"- 探针总数 {results['n_total']}；剔除泄漏 {lk['n_leaked']} 张"
-             f"（Pexels-ID 撞 {lk['n_id']} / 感知近重复 {lk['n_perceptual']}）"
-             f"；**干净探针 {results['n_clean']} 张**用于 FP 测。\n")
+    L.append("\n## 1. Leakage check\n")
+    L.append(f"- Probe images: {results['n_total']}. Removed as leaked: {lk['n_leaked']} "
+             f"(Pexels ID collisions {lk['n_id']}, perceptual near-duplicates "
+             f"{lk['n_perceptual']}). Clean probe set: {results['n_clean']} images, used for "
+             "the FP measurement.\n")
     if lk["examples"]:
-        L.append("- 泄漏样例（探针 → 命中的 split/图）：\n")
+        L.append("- Examples of leakage (probe image and the split/image it matched):\n")
         for e in lk["examples"][:8]:
             tag = e.get("manifest_path", f"ID={e.get('id')}")
             L.append(f"  - `{e['probe']}` → {e.get('split','?')} `{tag}`"
-                     f"（corr={e.get('pixel_corr','-')}）\n")
+                     f"(corr={e.get('pixel_corr','-')})\n")
 
-    L.append("\n## 2. 误触发率（FP）—— 干净探针，GT 全=不记\n")
+    L.append("\n## 2. False-trigger rate on the clean probe set "
+             "(ground truth is do-not-record throughout)\n")
     for tag, rows in (("keras(float)", results["fp_keras"]), ("int8(.tflite)", results["fp_int8"])):
-        L.append(f"\n**{tag}**\n\n| 阈值 | 判「记」/总数 | FP 率 |\n|---|---|---|\n")
+        L.append(f"\n**{tag}**\n\n| Threshold | Judged record / total | FP rate |\n|---|---|---|\n")
         for r in rows:
-            mark = "  ← 部署" if abs(r["threshold"] - DEPLOY_THRESHOLD) < 1e-6 else ""
+            mark = "  (deployment)" if abs(r["threshold"] - DEPLOY_THRESHOLD) < 1e-6 else ""
             L.append(f"| {r['threshold']} | {r['fp']}/{r['n']} | **{r['fp_rate']*100:.1f}%**{mark} |\n")
 
-    L.append("\n## 3. FP 案例（人眼复核）\n")
+    L.append("\n## 3. False-positive cases for manual review\n")
     if results.get("montage"):
-        L.append(f"- 拼图：`{out_dir}/{results['montage']}`（红字=p(记)）\n")
+        L.append(f"- Montage: `{out_dir}/{results['montage']}` "
+                 "(red text is the probability of record)\n")
     gc = results.get("gradcam", {})
     if gc.get("ok"):
-        L.append(f"- Grad-CAM：`{out_dir}/gradcam_fp_*.png`（{len(gc['saved'])} 张，"
-                 "左原图/右热力）。**FP 样本上热力若锁定人脸/人身，即捷径硬证据。**\n")
+        L.append(f"- Grad-CAM: `{out_dir}/gradcam_fp_*.png` ({len(gc['saved'])} images, "
+                 "original left, heatmap right). If the heat on a false-positive sample locks "
+                 "onto a face or a body, that is hard evidence of a shortcut.\n")
     else:
-        L.append(f"- Grad-CAM：未产出（{gc.get('note','-')}）。\n")
+        L.append(f"- Grad-CAM: not produced ({gc.get('note','-')}).\n")
 
     dep = next(r for r in results["fp_int8"] if abs(r["threshold"] - DEPLOY_THRESHOLD) < 1e-6)
     rate = dep["fp_rate"] * 100
-    L.append("\n## 4. 读数\n")
+    L.append("\n## 4. Reading\n")
     if results["n_clean"] < 60:
-        L.append(f"- ⚠ 干净探针仅 {results['n_clean']} 张，FP 率统计噪声大，先补到 ~200 再下结论。\n")
+        L.append(f"- Caveat: only {results['n_clean']} clean probe images, so the FP rate is "
+                 "statistically noisy. Expand to around 200 before drawing conclusions.\n")
     if rate >= 25:
-        L.append(f"- int8 部署阈值(0.55)下 FP **{rate:.1f}%**：**偏高**。结合审计 gap≈0 ⇒ "
-                 "更像**协变量/语境偏移**（影棚人像负类不覆盖杂乱实景人），解法是"
-                 "**增负类人像的场景多样性**而非单纯增量。看 Grad-CAM 是否锁人确认。\n")
+        L.append(f"- At the int8 deployment threshold of 0.55, FP is **{rate:.1f}%**, which is "
+                 "high. Combined with the audit gap of about 0, this looks like covariate or "
+                 "context shift: the studio-portrait negatives do not cover people in cluttered "
+                 "real scenes. The fix is more scene diversity among the people negatives rather "
+                 "than simply more of them. Check the Grad-CAM to see whether attention locks "
+                 "onto people.\n")
     elif rate >= 10:
-        L.append(f"- int8 部署阈值(0.55)下 FP **{rate:.1f}%**：**中等**。有一定语境偏移，"
-                 "值得补多样化的实景人像负例；同时核对 FP 案例是否多为「半屏/反光」等边界图。\n")
+        L.append(f"- At the int8 deployment threshold of 0.55, FP is **{rate:.1f}%**, which is "
+                 "moderate. There is some context shift, so more diverse real-scene people "
+                 "negatives are worth adding. Also check whether the false-positive cases are "
+                 "mostly borderline images such as partially visible screens or reflections.\n")
     else:
-        L.append(f"- int8 部署阈值(0.55)下 FP **{rate:.1f}%**：**低**。守门员在真实人像上并不普遍"
-                 "误触发——线上「对着人就触发」的印象更可能被阈值/光照/相机管线混淆，去那边查。\n")
-    L.append("- keras 与 int8 的 FP 若明显不同，说明量化改变了工作点，部署阈值需按 int8 重标。\n")
+        L.append(f"- At the int8 deployment threshold of 0.55, FP is **{rate:.1f}%**, which is "
+                 "low. The gatekeeper does not broadly false-trigger on real people, so the "
+                 "impression that it fires whenever a person is in frame is more likely "
+                 "confounded by the threshold, the lighting or the camera pipeline. Investigate "
+                 "there.\n")
+    L.append("- If keras and int8 FP differ noticeably, quantisation has moved the operating "
+             "point and the deployment threshold must be re-calibrated against int8.\n")
 
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text("".join(L), encoding="utf-8")
 
 
-# ───────────────────────────── 主流程 ─────────────────────────────
+# ----------------------------- main -----------------------------
 def collect_images(probe_dir: Path) -> list[Path]:
     if not probe_dir.exists():
         return []
@@ -382,28 +435,29 @@ def collect_images(probe_dir: Path) -> list[Path]:
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="探针集误触发(FP)测试：量真实有人、无屏幕文字时守门员的误触发率。",
+        description="Probe false-trigger test: measure the gatekeeper's false-positive rate on "
+                    "real people-present, no-screen-text scenes.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--probe-dir", type=Path, default=Path("data/probe_person_noscreen"),
-                   help="探针图目录（任意分辨率真实照片；递归扫描）")
+                   help="probe image directory (real photographs at any resolution; scanned recursively)")
     p.add_argument("--manifest", type=Path, default=Path("data/processed/manifest.csv"),
-                   help="train/val/test 全集，用于防泄漏核对")
+                   help="the full train/val/test manifest, used for the leakage check")
     p.add_argument("--data-root", type=Path, default=Path("data/processed"))
     p.add_argument("--keras-model", type=Path, default=Path("models/gatekeeper_v4_mvp.keras"))
     p.add_argument("--int8-model", type=Path, default=Path("models/gatekeeper_v4_mvp_int8.tflite"))
     p.add_argument("--out", type=Path, default=Path("data/processed/probe_fp_audit"),
-                   help="产物目录（拼图/Grad-CAM/CSV/JSON，gitignored）")
+                   help="output directory for montage, Grad-CAM, CSV and JSON (gitignored)")
     p.add_argument("--md-out", type=Path, default=Path("docs/probes/probe_fp_audit.md"))
     p.add_argument("--thresholds", type=str, default="0.5,0.55,0.7,0.9")
-    p.add_argument("--phash-th", type=int, default=6, help="感知哈希汉明阈（同 check_leakage）")
-    p.add_argument("--pixel-corr", type=float, default=0.90, help="像素相关阈（同 check_leakage）")
-    p.add_argument("--keep-leaked", action="store_true", help="不剔除泄漏探针（仅报告，调试用）")
-    p.add_argument("--no-leakage-check", action="store_true", help="跳过防泄漏核对（不建议）")
+    p.add_argument("--phash-th", type=int, default=6, help="perceptual hash Hamming threshold (same as check_leakage)")
+    p.add_argument("--pixel-corr", type=float, default=0.90, help="pixel correlation threshold (same as check_leakage)")
+    p.add_argument("--keep-leaked", action="store_true", help="do not remove leaked probe images; report only. For debugging")
+    p.add_argument("--no-leakage-check", action="store_true", help="skip the leakage check (not recommended)")
     p.add_argument("--no-gradcam", action="store_true")
     p.add_argument("--gradcam-n", type=int, default=10)
     p.add_argument("--montage-n", type=int, default=18)
-    p.add_argument("--limit", type=int, default=None, help="只取前 N 张探针（冒烟用）")
+    p.add_argument("--limit", type=int, default=None, help="use only the first N probe images (smoke test)")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
 
@@ -418,17 +472,18 @@ def main() -> int:
 
     if not images:
         print(PROBE_SPEC)
-        print(f"\n探针目录 `{args.probe_dir}` 为空/不存在 —— 已把投喂规格写入 {args.md_out}。")
+        print(f"\nProbe directory `{args.probe_dir}` is empty or missing. "
+              f"The collection spec has been written to {args.md_out}.")
         write_markdown(args.md_out, None, args.probe_dir, args.out)
         return 0
 
-    print(f"探针图 {len(images)} 张 @ {args.probe_dir}")
+    print(f"{len(images)} probe images at {args.probe_dir}")
 
-    # ── 防泄漏核对 ──
+    # -- leakage check --
     leaked: dict[str, dict] = {}
     n_id = n_perc = 0
     if not args.no_leakage_check:
-        print("防泄漏核对（Pexels-ID + 感知哈希）…")
+        print("Leakage check (Pexels ID plus perceptual hash)...")
         mids = manifest_id_set(args.manifest)
         idx = build_manifest_index(args.manifest, args.data_root)
         for img in images:
@@ -446,15 +501,19 @@ def main() -> int:
             if m:
                 leaked[str(img)] = {"probe": img.name, "reason": "perceptual", **m}
                 n_perc += 1
-        print(f"  泄漏：Pexels-ID {n_id} 张 / 感知近重复 {n_perc} 张（共 {len(leaked)}）")
+        print(f"  leaked: {n_id} by Pexels ID, {n_perc} by perceptual near-duplicate "
+              f"({len(leaked)} total)")
 
     clean = images if args.keep_leaked else [i for i in images if str(i) not in leaked]
-    print(f"  干净探针：{len(clean)} 张" + ("（--keep-leaked：未剔除）" if args.keep_leaked else ""))
+    print(f"  clean probe images: {len(clean)}"
+          + (" (--keep-leaked: nothing removed)" if args.keep_leaked else ""))
     if not clean:
-        print("没有干净探针可测（全部判为泄漏）。检查探针来源是否与训练集重叠。")
+        print("No clean probe images left; everything was judged leaked. "
+              "Check whether the probe source overlaps the training set.")
         return 1
 
-    # ── 载入干净探针灰度（保留原分辨率给可视化/部署预处理）──
+    # -- load clean probes as greyscale, keeping the original resolution for visualisation
+    #    and deployment preprocessing --
     names, grays = [], []
     for img in clean:
         g = cv2.imread(str(img), cv2.IMREAD_GRAYSCALE)
@@ -463,43 +522,45 @@ def main() -> int:
         names.append(re.sub(r"[^A-Za-z0-9]+", "_", img.stem)[:60])
         grays.append(g)
 
-    # ── 两个守门员推理 ──
+    # -- run both gatekeepers --
     import tensorflow as tf  # noqa: E402
-    print(f"keras 推理：{args.keras_model}")
+    print(f"keras inference: {args.keras_model}")
     kmodel = tf.keras.models.load_model(args.keras_model, compile=False)
     s_keras = keras_scores(kmodel, grays)
-    print(f"int8 推理：{args.int8_model}")
+    print(f"int8 inference: {args.int8_model}")
     interp = load_int8(args.int8_model)
     s_int8 = int8_scores(interp, grays)
 
     fp_keras = fp_table(s_keras, thresholds)
     fp_int8 = fp_table(s_int8, thresholds)
 
-    # ── 打印 ──
+    # -- print --
     print("\n" + "=" * 60)
-    print("探针 FP（GT 全=不记；FP 率=判「记」比例）")
+    print("Probe FP (ground truth is do-not-record throughout; "
+          "FP rate is the fraction judged as record)")
     print("=" * 60)
     for tag, rows in (("keras(float)", fp_keras), ("int8 (.tflite)", fp_int8)):
-        print(f"\n[{tag}]  阈值   判记/总   FP率")
+        print(f"\n[{tag}]  threshold   record/total   FP rate")
         for r in rows:
-            mark = "  ← 部署" if abs(r["threshold"] - DEPLOY_THRESHOLD) < 1e-6 else ""
+            mark = "  (deployment)" if abs(r["threshold"] - DEPLOY_THRESHOLD) < 1e-6 else ""
             print(f"          {r['threshold']:<5}  {r['fp']:>3}/{r['n']:<3}  "
                   f"{r['fp_rate']*100:5.1f}%{mark}")
 
-    # ── FP 案例（按 int8 部署阈值）拼图 + Grad-CAM ──
+    # -- false-positive cases at the int8 deployment threshold: montage plus Grad-CAM --
     fp_items = sorted(
         [(names[i], grays[i], float(s_int8[i])) for i in range(len(grays))
          if s_int8[i] >= DEPLOY_THRESHOLD],
         key=lambda t: -t[2])
-    # 保持按分数降序：最「自信」的 FP 排在前，拼图/Grad-CAM 先看这些
+    # Keep descending by score so the most confident false positives come first; those are the
+    # ones worth looking at in the montage and Grad-CAM
     montage = fp_montage(fp_items, args.out, args.montage_n)
     if montage:
-        print(f"  FP 拼图 → {args.out/montage}")
+        print(f"  FP montage -> {args.out/montage}")
     gradcam = {"ok": False, "saved": [], "note": "--no-gradcam"}
     if not args.no_gradcam and fp_items:
         gradcam = gradcam_on(args.keras_model, fp_items[:args.gradcam_n], args.out)
 
-    # ── 落盘逐图 CSV ──
+    # -- write the per-image CSV --
     det = pd.DataFrame({
         "probe": [c.name for c in clean[:len(grays)]],
         "p_record_keras": np.round(s_keras, 4),
@@ -519,7 +580,8 @@ def main() -> int:
     (args.out / "probe_fp_summary.json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     write_markdown(args.md_out, results, args.probe_dir, args.out)
-    print(f"\n审计文档 → {args.md_out}；汇总 JSON → {args.out/'probe_fp_summary.json'}")
+    print(f"\nAudit document -> {args.md_out}; "
+          f"summary JSON -> {args.out/'probe_fp_summary.json'}")
 
     dep_k = next(r for r in fp_keras if abs(r["threshold"] - DEPLOY_THRESHOLD) < 1e-6)
     dep_i = next(r for r in fp_int8 if abs(r["threshold"] - DEPLOY_THRESHOLD) < 1e-6)

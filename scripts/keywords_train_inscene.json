@@ -1,10 +1,10 @@
 {
-  "_comment": "训练负例补充：真实、杂乱、实景里的人，NO 屏幕/白板/文档文字。修复 person 协变量偏移（探针 FP 51%）。",
-  "_distinct_from_probe": "query 刻意与 keywords_probe.json 不同措辞，避免拉到同一批照片；download_images.py 的全局 Pexels-ID 去重（--output-root data）另会跳过任何已在 data/raw(训练) 或 data/probe_person_noscreen(探针) 里的 id。",
-  "_holdout_guard": "探针集是 held-out TEST，绝不进训练。本配置下载到 data/negative_people_inscene/，与 data/probe_person_noscreen/ 物理隔离；ingest 后再跑 check_leakage + 探针重叠核对（ID+感知）确认 0 重叠。",
-  "_manual_qc": "下载后必须人眼剔除任何含『可读屏幕/白板/文档/PPT 文字』的图（会议/办公类尤其易混进带屏幕的）——否则会把正例混进负类。",
-  "_usage": "python3 scripts/download_images.py --config scripts/keywords_train_inscene.json --output-root data  (→ data/negative_people_inscene/<slug>/；--output-root data 让去重基线覆盖 data/raw + data/probe_person_noscreen)",
-  "_count_plan": "计划上限 240；经 ID 去重 + 人眼剔屏 + 感知去重后净得 ~200 张，作为新负子类 negative_people_inscene 入训。",
+  "_comment": "Additional training negatives: real, cluttered, in-the-wild people, with no screen, whiteboard or document text. Fixes the person covariate shift, where probe FP was 51%.",
+  "_distinct_from_probe": "The query wording is deliberately different from keywords_probe.json so it does not pull the same photographs. The global Pexels-ID dedup in download_images.py, with --output-root data, additionally skips anything already in data/raw (training) or data/probe_person_noscreen (the probe).",
+  "_holdout_guard": "The probe set is a held-out test set and never enters training. This config downloads to data/negative_people_inscene/, physically separate from data/probe_person_noscreen/. After ingest, run check_leakage plus the probe overlap check, by ID and perceptual hash, to confirm zero overlap.",
+  "_manual_qc": "After downloading, manually remove any image containing readable screen, whiteboard, document or slide text. Meeting and office scenes are especially prone to including a screen. Otherwise positives end up in the negative class.",
+  "_usage": "python3 scripts/download_images.py --config scripts/keywords_train_inscene.json --output-root data  (writes data/negative_people_inscene/<slug>/; --output-root data makes the dedup baseline cover data/raw plus data/probe_person_noscreen)",
+  "_count_plan": "Planned ceiling of 240. After ID dedup, manual removal of screens and perceptual dedup, the net yield is about 200, entering training as the new negative subclass negative_people_inscene.",
   "negative_people_inscene": [
     {"query": "business people office meeting", "count": 30},
     {"query": "coworking space candid", "count": 30},

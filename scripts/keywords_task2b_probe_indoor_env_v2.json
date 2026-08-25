@@ -1,8 +1,8 @@
 {
-  "_comment": "Task2b held-out 探针 probe_indoor_env_v2：模型从未见过的【室内建成环境】负例，永不进训练。用于阶段二后测『室内环境误触发修复』是否泛化到未见场景类型。",
-  "_role": "PROBE ONLY — 下载到 data/probe_indoor_env_v2（在 data/raw 之外），prepare_dataset 不会摄入，绝不进训练池。",
-  "_design": "刻意选与 FP 诊断场景（office/meeting/living）同因果混淆类（室内、墙/窗/矩形家具/可能关闭的屏）但【不同场景类型】(lobby/library/lounge/reception/waiting)，使其成为泛化探针；并偏 furniture/architecture、低『可读文字屏』概率以保探针标签干净（仍需人眼 QC）。",
-  "_zero_overlap": "下载后跑 guard 校验：vs 训练池(data/raw) + 现有两探针 零 ID / 零感知近重复；命中即 quarantine。",
+  "_comment": "Task 2b held-out probe probe_indoor_env_v2: indoor built-environment negatives the model has never seen, never entering training. Used after phase two to test whether the indoor false-trigger fix generalises to unseen scene types.",
+  "_role": "PROBE ONLY. Downloaded to data/probe_indoor_env_v2, outside data/raw, so prepare_dataset does not ingest it and it never enters the training pool.",
+  "_design": "Deliberately chosen to share the causal confounders of the diagnosed FP scenes (office, meeting, living room): indoors, walls, windows, rectangular furniture, possibly switched-off screens. But the scene types are different (lobby, library, lounge, reception, waiting area), which makes it a generalisation probe. Weighted toward furniture and architecture.",
+  "_zero_overlap": "After downloading, run the guard check against the training pool (data/raw) and both existing probes: zero ID collisions and zero perceptual near-duplicates. Anything that hits is quarantined.",
   "_usage": "python3 scripts/download_images.py --config scripts/keywords_task2b_probe_indoor_env_v2.json --output-root data/probe_indoor_env_v2",
   "probe_indoor_env": [
     {"query": "hotel lobby interior seating area", "count": 12},

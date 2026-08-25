@@ -1,112 +1,168 @@
-# 守门员模型可信度校核报告（Task1 · 阶段 1）
+# Credibility audit of the gatekeeper's first numbers
 
-> **Summary (EN).** Credibility audit of the first reported numbers. Perceptual hashing plus
-> pixel-level confirmation found 132 near-duplicate pairs / 88 duplicate groups, 49 of them
-> spanning train/val/test splits and 48 of those purely positive-class. Root cause: the
-> Pexels downloader fetched the same stock photo under several keywords, so copies landed in
-> different class folders and then in different splits. After connected-component dedup and
-> a stratified re-split, cross-split leakage is 0. The corrected baseline is F1 0.756 ± 0.024
-> over 5 seeds — the earlier "FN and FP both below 0.30" claim was retracted as an artefact
-> of leakage plus single-seed luck.
+Task 1, phase 1. 2026-06-17.
 
-日期：2026-06-17 
-方法学：沿用第一版"如实记录失败 → 诊断 → 下药"。所有指标标明 split；**test 为最终裁定，val 用于调参**。
+Method follows the pattern used from the start: record the failure honestly, diagnose it, then
+fix it. Every metric below states which split it came from. Test is the deciding split; val is
+for tuning.
 
-> **基线声明（重要）**：自阶段 1 起，所有指标均基于 **dedup 去重清单**（`data/processed/manifest_dedup.csv` 及 `dedup_*.csv`）。**原始 1628 张 split 已作废，不再用于任何裁定。**
+From this phase onward all metrics are based on the deduplicated manifest
+(`data/processed/manifest_dedup.csv` and `dedup_*.csv`). The original 1628-image splits are
+withdrawn and are not used to decide anything.
 
----
+## 0. Summary
 
-## 0. 结论速览（TL;DR）
-
-| 问题 | 结论 |
+| Question | Answer |
 |---|---|
-| train/val/test 之间有数据泄漏吗？ | **有，且不轻**。49 个重复组跨 split，其中 48 个是纯正例组。 |
-| 0.80 的 **accuracy** 可信吗？ | **可信、且稳定**。去重重切分后 5 seed = **0.790 ± 0.014**，与原 0.81 基本一致。 |
-| 第一版报的 **FN 0.277 / FP 0.130** 可信吗？ | **不可信，偏乐观**。泄漏（几乎全在正类）虚高了 recall、压低了表观 FN。去重后同 seed=42 的 FN 实为 **0.337**。 |
-| 真实 **F1** 是多少？ | 第一版从未报过 F1。去重后真实 F1 = **0.756 ± 0.024**，距 0.85 目标有实打实的差距。 |
+| Is there leakage between train, val and test? | Yes, and not a small amount. 49 duplicate groups span splits, and 48 of them are purely positive-class. |
+| Is the 0.80 accuracy trustworthy? | Yes, and it is stable. After dedup and re-split, 5 seeds give 0.790 ± 0.014, essentially the original 0.81. |
+| Are the first-version FN 0.277 and FP 0.130 trustworthy? | No. They are optimistic. Leakage sat almost entirely in the positive class, inflating recall and suppressing apparent FN. After dedup, the same seed 42 gives FN 0.337. |
+| What is the real F1? | The first version never reported one. After dedup it is 0.756 ± 0.024, a genuine gap from the 0.85 target. |
 
-**一句话**：准确率 0.80 是真的、稳的；但"FN/FP 都 < 0.30"的乐观结论是泄漏（+ 单次 seed 运气）造出来的假象。真正要解决的是 F1≈0.76、且 recall 在不同切分下不稳（0.66–0.85）。
+The short version: accuracy of 0.80 is real and stable, but the claim that FN and FP were both
+below 0.30 was produced by leakage plus one lucky seed. The real problem to solve is F1 around
+0.76 with recall that moves between 0.66 and 0.85 depending on the split.
 
----
+## 1. Leakage check
 
-## 1. 数据泄漏检查
+### 1.1 Method
 
-### 1.1 方法
-脚本 `scripts/check_leakage.py`，两道关卡（先廉价后精确）：
-1. **感知哈希粗筛**：对全量 1628 张处理后 96×96 灰度图算 pHash(DCT) + dHash，全对比较 Hamming 距离，挑出 pHash 汉明 ≤ 6 的候选对。
-2. **像素级二次确认**：对候选对算 96×96 像素的 Pearson 相关系数 + 归一化 MSE，仅相关性 ≥ 0.90 才判真·近重复，滤掉哈希碰撞误报。
+`scripts/check_leakage.py` runs two passes, cheap first then precise.
 
-去重用 `scripts/dedup_resplit.py`：对确认的近重复对建**连通分量**（并查集），每组留一张代表（字典序最小路径，确定性可复现），再按与 `prepare_dataset.py` 一致的"按大类分层 70/15/15"重切分。
+1. Perceptual-hash coarse pass. Compute pHash (DCT) and dHash over all 1628 processed 96x96
+   greyscale images, compare every pair by Hamming distance, and keep pairs with pHash
+   distance at most 6 as candidates.
+2. Pixel-level confirmation. For each candidate pair compute the Pearson correlation and
+   normalised MSE over the 96x96 pixels. Only pairs correlating at 0.90 or above count as real
+   near-duplicates, which filters out hash collisions.
 
-> 注：未用 `imagehash` 等第三方库（环境未安装该库），pHash/dHash 用 `numpy + cv2.dct` 自实现，标准做法。
+Deduplication is `scripts/dedup_resplit.py`: build connected components (union-find) over the
+confirmed near-duplicate pairs, keep one representative per group (lexicographically smallest
+path, so it is deterministic and reproducible), then re-split 70/15/15 stratified by top-level
+class, matching what `prepare_dataset.py` does.
 
-### 1.2 发现
-- pHash 候选对 134 → 像素确认真近重复 **132 对**（近乎一致 corr≥0.999：125 对）。
-- 按连通分量：**88 个重复组**，涉及 198 张图，最大组 3 张（66 组成对、22 组三连）。
-- **跨 split 的重复组（= 泄漏）：49 个**，其中 **48 个纯正例组**、1 个含负例。
-- 跨 split 重复对按 split 计数：`test↔train 33`、`train↔val 27`、`test↔val 4`。
+pHash and dHash are implemented directly with numpy and `cv2.dct` rather than pulling in
+`imagehash` — the library was not installed and the algorithms are standard.
 
-### 1.3 根因（已确证）
-**83/88 个重复组的成员共享同一 Pexels 图片 ID**（文件名中段数字）。即 `download_images.py` 用多个关键词抓图时，**同一张库存图被不同关键词重复下载**，落入不同的 positive 子类目录（如同一图同时进 `powerpoint_slide` / `classroom_projector_slides` / `projector_screen_presentation`）。而分层切分按"来源大类（positive）"整体切，于是同图副本被分散到 train/val/test，造成训练集"见过"测试集的图。泄漏集中在正类，故**虚高正类表现**。
+### 1.2 Findings
 
-### 1.4 去重 + 重切分的影响
-| | 全量 | 去重后 |
+- 134 pHash candidate pairs reduced to 132 confirmed near-duplicate pairs, of which 125 are
+  near-identical at correlation 0.999 or above.
+- By connected component: 88 duplicate groups covering 198 images. Largest group is 3 images
+  (66 pairs, 22 triples).
+- 49 groups span splits, which is the leakage. 48 of those are purely positive-class; one
+  contains a negative.
+- Cross-split duplicate pairs by split: test/train 33, train/val 27, test/val 4.
+
+### 1.3 Root cause, confirmed
+
+83 of the 88 duplicate groups share a Pexels image ID (the numeric segment in the filename).
+`download_images.py` fetches images by keyword, so the same stock photo gets downloaded
+repeatedly under different keywords and lands in different positive subclass folders — one
+image ending up in `powerpoint_slide`, `classroom_projector_slides` and
+`projector_screen_presentation` at once. The stratified split then splits by top-level class,
+which scatters copies of one image across train, val and test, so the training set has seen
+test images. Because the leakage sits in the positive class, it inflates positive-class
+performance specifically.
+
+### 1.4 Effect of dedup and re-split
+
+| | Full | After dedup |
 |---|---|---|
-| 总数 | 1628 | **1518**（移除 110） |
-| 正例 | 751 | 644（移除 **107**） |
-| 负例 | 877 | 874（移除 3） |
+| Total | 1628 | 1518 (110 removed) |
+| Positive | 751 | 644 (107 removed) |
+| Negative | 877 | 874 (3 removed) |
 
-去重后 seed=42 重切分：train 1061 / val 226 / test 231（正负比 ~0.737，原 0.856——因移除了大量正例重复）。
-**复查确认**：对去重后的三 split 重跑泄漏检查 → 跨 split 重复 **0 对**、内部重复 0 对，泄漏根除。
+The seed 42 re-split after dedup gives train 1061 / val 226 / test 231, with a positive-to-
+negative ratio around 0.737 against the original 0.856 — the drop is because so many positive
+duplicates were removed.
 
-去重后清单：`data/processed/manifest_dedup.csv`；候选对明细：`docs/results/leakage_candidates.csv`。
+Re-checked: running the leakage check again over the three deduplicated splits reports 0
+cross-split duplicate pairs and 0 within-split duplicates. The leakage is gone.
 
----
+Deduplicated manifest: `data/processed/manifest_dedup.csv`. Candidate pair detail:
+`docs/results/leakage_candidates.csv`.
 
-## 2. 方差校核（0.80 是稳定值还是单次幸运？）
+## 2. Variance check: is 0.80 stable or was it one lucky run?
 
-### 2.1 方法
-脚本 `scripts/run_variance.py`：在**去重后**清单上，用 5 个 seed `{42,1,7,123,2024}` 各自重切分 + 重训（先消泄漏再测方差，否则方差本身被污染）。
-**冻结最佳配置**（第一版修复后的组合）：`bn_momentum=0.9, patience=15, start_from_epoch=20, epochs=80, augment=True, class_weight=balanced, lr=1e-3, monitor=val_loss(restore best)`。阈值 0.5（argmax）。
+### 2.1 Method
 
-### 2.2 结果（test split，正类=1=记）
+`scripts/run_variance.py` takes the deduplicated manifest and re-splits and retrains under
+each of 5 seeds `{42,1,7,123,2024}`. Leakage is eliminated first, because otherwise the
+variance measurement is itself contaminated.
+
+Configuration frozen at the best combination from the first-version fixes: `bn_momentum=0.9,
+patience=15, start_from_epoch=20, epochs=80, augment=True, class_weight=balanced, lr=1e-3,
+monitor=val_loss (restore best)`. Threshold 0.5 (argmax).
+
+### 2.2 Results
+
+Test split, positive class = 1 = record.
 
 | seed | epochs | accuracy | F1 | recall | precision | FN rate | FP rate |
 |---|---|---|---|---|---|---|---|
-| 42 | 50 | 0.7922 | 0.7303 | 0.6633 | 0.8125 | **0.3367** | 0.1128 |
+| 42 | 50 | 0.7922 | 0.7303 | 0.6633 | 0.8125 | 0.3367 | 0.1128 |
 | 1 | 54 | 0.8009 | 0.7830 | 0.8469 | 0.7281 | 0.1531 | 0.2331 |
 | 7 | 45 | 0.8052 | 0.7783 | 0.8061 | 0.7524 | 0.1939 | 0.1955 |
 | 123 | 60 | 0.7835 | 0.7619 | 0.8163 | 0.7143 | 0.1837 | 0.2406 |
 | 2024 | 59 | 0.7662 | 0.7245 | 0.7245 | 0.7245 | 0.2755 | 0.2030 |
-| **均值±std** | | **0.7896 ± 0.0139** | **0.7556 ± 0.0241** | **0.7714 ± 0.0675** | **0.7464 ± 0.0354** | **0.2286 ± 0.0675** | **0.1970 ± 0.0455** |
+| mean ± std | | 0.7896 ± 0.0139 | 0.7556 ± 0.0241 | 0.7714 ± 0.0675 | 0.7464 ± 0.0354 | 0.2286 ± 0.0675 | 0.1970 ± 0.0455 |
 
-机读结果：`docs/results/variance_results.json`。
+Machine-readable: `docs/results/variance_results.json`.
 
-### 2.3 解读
-- **accuracy 0.79 ± 0.014 → 稳定**。不是单次幸运；与第一版 0.81 在噪声范围内一致。准确率这个数可信。
-- **recall / FN 方差大**（recall 0.66–0.85，std 0.068）。决策边界位置在不同切分下漂移明显——这恰好说明 **Phase 3 的"阈值调整"是对症的**（accuracy 稳但 precision/recall 配比不稳）。
-- **泄漏确实掩盖了 FN 问题**：去重后 seed=42 的 FN = 0.337，比泄漏版同条件报的 0.277 更差；FP 率整体也从 0.130 升到 ~0.197。即第一版"FN/FP 都 < 0.30"是被污染数据 + 该 seed 运气共同造出的假象。
-- **真实 F1 ≈ 0.756**，离 0.85 目标差约 0.09，是实打实要补的差距，不是测量误差。
+### 2.3 Reading
 
----
+Accuracy at 0.79 ± 0.014 is stable. It was not one lucky run, and it agrees with the original
+0.81 within noise. That number can be trusted.
 
-## 3. 对后续阶段的影响（交接给 Phase 2/3）
+Recall and FN vary a lot: recall spans 0.66 to 0.85 with std 0.068. The decision boundary
+moves noticeably between splits, which is precisely why the phase 3 plan to sweep the
+threshold is the right treatment — accuracy is stable while the precision/recall mix is not.
 
-1. **基线口径切换**：后续所有训练/评估改用去重清单与去重切分（`data/processed/manifest_dedup.csv` + `dedup_*.csv`），不要再用被污染的原始 `train/val/test.csv`。
-2. **校正目标基线**：真实起点是 **F1 0.756 / FN 0.229（均值）**，不是第一版的 0.277。Phase 3 的"FN 下降"应以此为基准衡量。
-3. **优先级佐证**：recall 方差大 + accuracy 稳 → Phase 3 第 1 步"决策阈值扫描"零成本且最对症，应先做；评估工具 `scripts/evaluate.py` 已支持 `--pr-sweep` 阈值扫描与任意阈值复评。
-4. **数据侧根因**：若要从源头防止再次泄漏，应在 `download_images.py` 下载阶段按 Pexels 图片 ID 去重（待与已确认是否动下载脚本）。
+Leakage really was hiding the FN problem. After dedup, seed 42 gives FN 0.337, worse than the
+0.277 reported under the same conditions with leakage, and FP rate rises from 0.130 to about
+0.197. The first version's "FN and FP both below 0.30" came from contaminated data and that
+seed's luck together.
 
----
+Real F1 is about 0.756, roughly 0.09 short of the 0.85 target. That is a genuine gap to close,
+not measurement error.
 
-## 4. 失败/诊断记录（方法学留痕）
+## 3. Consequences for phases 2 and 3
 
-- **失败**：第一版报的 FN 0.277 被当作"达标"，实为泄漏 + 单 seed 运气的乐观估计。
-- **诊断**：感知哈希 + 像素确认定位 64 跨 split 重复对，连通分量 + Pexels-ID 共享率 83/88 锁定"同图多关键词下载"根因。
-- **下药**：连通分量去重（留 1 张）+ 分层重切分，泄漏归零；5-seed 方差校核给出可信基线（acc 稳、F1 0.756、FN/recall 不稳）。
+1. Switch the baseline. All later training and evaluation uses the deduplicated manifest and
+   splits (`data/processed/manifest_dedup.csv` plus `dedup_*.csv`). The contaminated original
+   `train/val/test.csv` is not to be used again.
+2. Correct the target baseline. The real starting point is F1 0.756 and mean FN 0.229, not the
+   first version's 0.277. Any claimed FN reduction in phase 3 must be measured against this.
+3. Priority evidence. High recall variance with stable accuracy means the first phase 3 step,
+   sweeping the decision threshold, is both free and well targeted, so it should come first.
+   `scripts/evaluate.py` already supports `--pr-sweep` and re-scoring at an arbitrary
+   threshold.
+4. Fix the root cause in the data layer. To prevent this recurring, `download_images.py` should
+   deduplicate by Pexels image ID at download time. Whether to change the download script is
+   still to be decided.
 
-## 附：本阶段新增脚本（均无新增依赖，复用 numpy/pandas/cv2/tf）
-- `scripts/check_leakage.py` — 跨 split 重复/泄漏检查（pHash+dHash 粗筛 + 像素确认）。
-- `scripts/dedup_resplit.py` — 连通分量去重 + 分层重切分（`build` / `split` 两子命令）。
-- `scripts/evaluate.py` — 完整指标一键复评（acc/precision/recall/F1/混淆/FN/FP，支持任意阈值与 `--pr-sweep`）。
-- `scripts/run_variance.py` — 5-seed 方差校核 harness。
+## 4. Failure and diagnosis record
+
+Failure: the first version reported FN 0.277 and treated it as passing. It was an optimistic
+estimate produced by leakage plus single-seed luck.
+
+Diagnosis: perceptual hashing plus pixel confirmation located the cross-split duplicate pairs;
+connected components plus the 83-of-88 Pexels-ID sharing rate pinned the root cause to the same
+image being downloaded under multiple keywords.
+
+Fix: connected-component dedup keeping one image per group, plus a stratified re-split, took
+leakage to zero. A 5-seed variance check then established a trustworthy baseline: accuracy
+stable, F1 0.756, FN and recall unstable.
+
+## Appendix: scripts added in this phase
+
+None of these add a dependency; they reuse numpy, pandas, cv2 and tf.
+
+- `scripts/check_leakage.py` — cross-split duplicate and leakage check (pHash + dHash coarse
+  pass, pixel confirmation).
+- `scripts/dedup_resplit.py` — connected-component dedup plus stratified re-split, with `build`
+  and `split` subcommands.
+- `scripts/evaluate.py` — full metrics in one command (accuracy, precision, recall, F1,
+  confusion matrix, FN, FP), at any threshold, with `--pr-sweep`.
+- `scripts/run_variance.py` — the 5-seed variance harness.

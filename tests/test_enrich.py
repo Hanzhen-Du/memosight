@@ -1,4 +1,4 @@
-"""M3: Enricher 接口 + MockCloudEnricher(mock) + 打包逻辑测试。"""
+"""M3: tests for the enricher interface, MockCloudEnricher and the packaging logic."""
 
 import unittest
 
@@ -8,13 +8,13 @@ from pipeline.packaging import Payload, build_payload
 
 class TestPackaging(unittest.TestCase):
     def test_build_payload_and_metadata(self):
-        p = build_payload("白板文本", "2026-07-06T10:00:00+00:00", 0.88)
+        p = build_payload("whiteboard text", "2026-07-06T10:00:00+00:00", 0.88)
         self.assertIsInstance(p, Payload)
         md = p.metadata()
         self.assertEqual(
             set(md), {"timestamp", "trigger_confidence", "raw_image_policy"}
         )
-        self.assertNotIn("ocr_text", md)          # ocr_text 不在 metadata 里
+        self.assertNotIn("ocr_text", md)          # ocr_text is not part of the metadata
         self.assertEqual(md["raw_image_policy"], "delete")
 
     def test_to_dict_includes_ocr(self):
@@ -32,16 +32,16 @@ class TestMockCloudEnricher(unittest.TestCase):
 
     def test_returns_mock_tags(self):
         enr = MockCloudEnricher()
-        tags = enr.enrich("Kubernetes 部署架构图", {"trigger_confidence": 0.9})
+        tags = enr.enrich("Kubernetes deployment architecture diagram", {"trigger_confidence": 0.9})
         self.assertIsInstance(tags, list)
         self.assertTrue(tags)
-        # 所有生成标签带 mock: 前缀，诚实标注为假标签
+        # Every generated tag carries a mock: prefix, marking it honestly as fake
         self.assertTrue(all(t.startswith("mock:") for t in tags))
 
     def test_deterministic_for_same_input(self):
         enr = MockCloudEnricher()
         md = {"trigger_confidence": 0.9}
-        self.assertEqual(enr.enrich("同一段文本", md), enr.enrich("同一段文本", md))
+        self.assertEqual(enr.enrich("the same text", md), enr.enrich("the same text", md))
 
     def test_confidence_reflected(self):
         enr = MockCloudEnricher()

@@ -1,218 +1,236 @@
-# 导师问题 2 — 「本地 OCR 未必比传图省电，而且传图更快」：测量方法学
+# Measuring whether local OCR actually saves power
 
-> **Summary (EN).** Measurement protocol for comparing two downstream architectures —
-> local OCR then text upload (~1.4 KB) versus whole-image upload (~900 KB) — on real energy
-> rather than byte count. Sets out the per-component energy model, the fixed radio wake-up
-> cost that byte-count arguments miss, the break-even-throughput derivation, and the
-> instrumentation still required. Power figures are explicitly *not* yet measured.
+2026-07-28. Framework code: `scripts/power_compare_framework.py`.
 
-**2026-07-28框架代码：`scripts/power_compare_framework.py`**
+The advisor's objection was that local OCR is not necessarily cheaper than uploading the image,
+and that uploading may well be faster. This document sets out how to decide that with
+measurement rather than assertion.
 
-> ## ⚠️ 本文件不含任何实测功耗数字
-> 树莓派当前连不上、功耗计未接线。本轮交付的是**测量框架 + 方法学 + 模拟验证**。
-> 文中出现的一切能耗数值都由**占位参数表**（`MockParams`）合成，用途只有一个：
-> 证明流程能跑通、CSV 结构可用、功耗计一接上换掉一个类就能出真数据。
-> **这些数字不得写进汇报、不得当作结论。** 真实测量待办见 实验记录 的 H1–H5。
+**This file contains no measured power figures.** The Raspberry Pi is currently unreachable and
+the power meter is not wired up. What this round delivers is the measurement framework, the
+method, and a simulated run proving the framework works. Every energy value that appears here
+was synthesised from a placeholder parameter table (`MockParams`), for one purpose only: to
+show the pipeline runs end to end, that the CSV structure is usable, and that swapping in a
+real meter means replacing a single class. These numbers must not go into a report and must not
+be treated as conclusions. The real measurements still to be taken are H1 to H5 in section 6.
 
----
+## 0. The objection is correct, and more so than it first appears
 
-## 0. 先说立场：导师的质疑是对的，而且比表面更对
+"Local OCR saves power" is an assumption this project has relied on from the start and never
+tested. It may be wrong, for concrete reasons:
 
-"本地 OCR 更省电"是这个项目一直**默认成立但从未验证**的前提。它可能是错的，理由很具体：
+- Local OCR is several hundred milliseconds of saturated CPU, which is expensive computation on
+  an edge device.
+- Uploading an image moves many more bytes, but WiFi transmission is high power for a short
+  time. On a fast network that window may be shorter than the OCR.
+- The upload path barely computes at all: one JPEG encode, a few tens of milliseconds.
 
-- 本地 OCR 是**几百毫秒的 CPU 满载**，这在端侧是很贵的一段计算；
-- 传图虽然字节多，但 WiFi 发射是**高功率、短时间**——如果网络快，这段时间可能比 OCR 还短；
-- 而且传图路径**几乎不占计算**（只有一次 JPEG 编码，几十毫秒）。
+So this framework does not presuppose an answer. It splits both paths into separately
+measurable components and lets the measurements decide, and it works out explicitly under what
+conditions each side wins rather than giving a single blanket answer.
 
-所以本框架**不预设结论**。它做的事是：把两条路径的能耗拆成可分别测量的项，
-让实测数据来判——**并且明确算出"在什么条件下谁赢"，而不是给一个笼统的答案。**
+There is also a distinction worth drawing out: saving power and saving time are two different
+questions, and they can have different answers (section 4). The advisor's remark actually
+contains two independent claims, and they need separate answers.
 
-**而且我们发现："省电"和"更快"是两个不同的问题，答案可以不一样**（见 §4 的矛盾区）——
-导师那句话其实包含两个独立命题，需要分别回答。
-
----
-
-## 1. 两条路径的能耗构成
+## 1. What each path spends energy on
 
 ```
-路径X（本地 OCR）：守门员触发 → 抓高清帧 → 本地 OCR → 只传文本（~1.4 KB）
-路径Y（直接传图）：守门员触发 → 抓高清帧 → JPEG 编码 → 传整张图（~900 KB）
+Path X (local OCR):    gatekeeper fires -> grab full-res frame -> local OCR -> upload text only (~1.4 KB)
+Path Y (upload image): gatekeeper fires -> grab full-res frame -> JPEG encode -> upload whole image (~900 KB)
 
 E_X = E_capture + E_ocr          + E_tx(text_bytes)
 E_Y = E_capture + E_jpeg_encode  + E_tx(image_bytes)
-      └ 相同 ┘   └ X 在这里贵 ┘   └ Y 在这里贵 ┘
+      |-- same --|  |- X pays here -|  |------ Y pays here ------|
 ```
 
-**关键结构**：`E_capture` 两条路径完全相同，比较时抵消。真正的差异只有两项：
+`E_capture` is identical on both paths and cancels in the comparison. Only two terms actually
+differ:
 
-| | 路径X | 路径Y | 性质 |
+| | Path X | Path Y | Character |
 |---|---|---|---|
-| **计算能耗** | OCR，几百 ms CPU 满载 | JPEG 编码，几十 ms | **近似固定**，不随网络变 |
-| **传输能耗** | ~1.4 KB | ~900 KB | **随图大小 / 网络状况剧烈变化** |
+| Compute energy | OCR, several hundred ms of saturated CPU | JPEG encode, tens of ms | Roughly fixed, does not vary with the network |
+| Transmission energy | ~1.4 KB | ~900 KB | Varies sharply with image size and network conditions |
 
-> 这就是为什么这是个**真实的权衡而不是一边倒**：一项固定、一项浮动，
-> 二者的相对大小取决于**网络吞吐**这个我们不控制的外部变量。
-> 在地铁里和在办公室 WiFi 下，答案可能相反。
+That is what makes this a genuine trade-off rather than a foregone conclusion: one term is
+fixed and the other floats, and their relative size depends on network throughput, an external
+variable we do not control. On a train and on office WiFi the answer may be opposite.
 
-传输能耗模型（框架里实现的）：
-
-```
-t_tx = t_radio_wake + (bytes × 8) / throughput
-E_tx = (P_radio_tx − P_idle) × t_tx
-```
-
-`t_radio_wake` 是**每次传输的固定射频唤醒/关联开销**，与字节数无关。
-这一项对路径X 特别不利——传 1.4 KB 也要付一次唤醒钱，摊不薄。**不能只按字节数比。**
-
----
-
-## 2. 测量方法：差值法（differential method）
-
-**不能直接读"OCR 用了多少电"**，因为功耗计读到的是整块板子的功率，里面混着系统本底。
+The transmission energy model implemented in the framework:
 
 ```
-1) 测 idle 本底：守门员常开、确保无触发的窗口，采 ≥2s → P_idle
-2) 测任务期功率：执行该段任务，高频轮询功率并积分 → P_active, t
-3) 该段的增量能耗 = (P_active − P_idle) × t
+t_tx = t_radio_wake + (bytes * 8) / throughput
+E_tx = (P_radio_tx - P_idle) * t_tx
 ```
 
-**为什么必须用差值**：路径X 和路径Y 跑在同一块板子上、共享同一份本底功耗。
-只有剥离本底后的**增量**才是两条路径的真实差异。直接比总功率会被本底稀释，
-显得"两条路径差不多"——那是测量假象。
+`t_radio_wake` is a fixed radio wake-up and association cost paid on every transmission,
+independent of byte count. That term is particularly unkind to path X, which still pays a full
+wake-up to send 1.4 KB and has nothing to amortise it over. Comparing on byte count alone gets
+this wrong.
 
-**采样率要求**：≥200 Hz。JPEG 编码只有几十毫秒，采样太慢会积不准短任务。
+## 2. Method: differential measurement
 
-**接线方案**（待实施）：INA219 高侧串在 Pi 5 的 5V 供电回路，I²C 读数。
-用第二块板读更干净（不让被测板承担采样开销），代价是要做时间同步。
+You cannot read "how much energy the OCR used" directly, because the meter reads the power of
+the whole board, which includes the system's idle draw.
 
----
+```
+1) Measure the idle baseline: gatekeeper running, in a window guaranteed to have no trigger,
+   sampled for at least 2 s  ->  P_idle
+2) Measure during the task: run that segment, poll power at high rate and integrate
+   ->  P_active, t
+3) Incremental energy for the segment = (P_active - P_idle) * t
+```
 
-## 3. 要测的量 / 输出结构
+The subtraction is not optional. Path X and path Y run on the same board and share the same
+idle draw, so only the increment above the baseline is the real difference between them.
+Comparing total power lets the baseline dilute the difference and makes the two paths look
+similar, which is a measurement artefact rather than a finding.
 
-每次触发一行，写 `outputs/power_compare_trials.csv`：
+Sampling rate must be at least 200 Hz. JPEG encoding takes only tens of milliseconds, and
+sampling too slowly integrates short tasks inaccurately.
 
-| 字段 | 含义 |
+Wiring plan, not yet implemented: an INA219 high-side on the Pi 5's 5 V supply, read over I2C.
+Reading from a second board is cleaner, since it keeps the sampling overhead off the board
+under test, at the cost of needing time synchronisation.
+
+## 3. What gets recorded
+
+One row per trigger, written to `outputs/power_compare_trials.csv`.
+
+| Field | Meaning |
 |---|---|
-| `trial` / `path` | 第几次触发 / `X_local_ocr` 或 `Y_send_image` |
-| **`meter` / `is_real`** | **功耗计类型 / 是否实测。`is_real=False` 即模拟数据，禁止引用** |
-| `p_idle_mw` | 该次的 idle 本底（差值法减数） |
-| `capture_ms` | 抓高清帧耗时（两路共有） |
-| `compute_ms` | X = OCR 耗时；Y = JPEG 编码耗时 |
-| `tx_bytes` / `tx_ms` | 传输字节数 / 传输耗时（含射频唤醒） |
-| `e_capture_mj` / `e_compute_mj` / `e_tx_mj` | **分项**增量能耗（mJ） |
-| `e_total_mj` | 每次触发的端侧总增量能耗（mJ/次）← **主指标** |
-| `latency_ms` | 端到端时延 ← **验证导师"传图更快"的那一列** |
+| `trial` / `path` | Trigger number / `X_local_ocr` or `Y_send_image` |
+| `meter` / `is_real` | Meter type / whether this is a real measurement. `is_real=False` means simulated data and must not be cited |
+| `p_idle_mw` | The idle baseline for this trial, the subtrahend in the differential method |
+| `capture_ms` | Time to grab the full-resolution frame, common to both paths |
+| `compute_ms` | OCR time for X, JPEG encode time for Y |
+| `tx_bytes` / `tx_ms` | Bytes transmitted / transmission time, including radio wake-up |
+| `e_capture_mj` / `e_compute_mj` / `e_tx_mj` | Incremental energy per component, in mJ |
+| `e_total_mj` | Total incremental on-device energy per trigger, in mJ. The primary metric |
+| `latency_ms` | End-to-end latency. This is the column that tests the "uploading is faster" claim |
 
-**分项记录而不是只记总数**，是为了将来能回答"贵在哪一段"，而不只是"谁贵"。
+Components are recorded separately rather than just a total so the question "which segment is
+expensive" can be answered later, not only "which path is expensive".
 
----
+## 4. Why this is a real trade-off: crossover analysis
 
-## 4. 为什么这是真实权衡：交叉点分析
+The framework includes an analytical mode that needs no power meter (`--crossover-only`).
+Setting `E_X - E_Y = 0` and solving gives the break-even throughput.
 
-框架里有一个**不需要功耗计**就能跑的解析分析（`--crossover-only`）：
-令 `E_X − E_Y = 0`，解出**盈亏平衡吞吐**。
-
-**省电与省时是两个不同的方程，交叉点不重合：**
+Saving power and saving time are different equations, and their crossovers do not coincide:
 
 ```
-能耗平衡： (P_tx − P_idle) × Δt_tx  ==  OCR 比编码多花的能耗
-时延平衡：              Δt_tx      ==  OCR 比编码多花的时间
+Energy break-even:  (P_tx - P_idle) * dt_tx  ==  the extra energy OCR costs over encoding
+Latency break-even:              dt_tx       ==  the extra time OCR costs over encoding
 ```
 
-⚠️ 以下表格代入的是**占位参数**，数值本身无意义；**有意义的是它展示的结构**：
+The table below is computed from placeholder parameters. The values mean nothing. What means
+something is the structure it shows.
 
-| 吞吐 | 省电赢家 | 省时赢家 |
+| Throughput | Lower energy | Lower latency |
 |---|---|---|
-| 500 – 6,000 kbps | X 本地OCR | X 本地OCR |
-| **6,773 – 8,930 kbps** | **Y 传图** | **X 本地OCR** ← 矛盾区 |
-| 12,000 kbps 以上 | Y 传图 | Y 传图 |
+| 500 – 6,000 kbps | X, local OCR | X, local OCR |
+| 6,773 – 8,930 kbps | Y, upload image | X, local OCR (the contradictory band) |
+| Above 12,000 kbps | Y, upload image | Y, upload image |
 
-**三个结构性结论（不依赖具体参数值）：**
+Three structural conclusions that do not depend on the specific parameter values:
 
-1. **一定存在一个盈亏平衡吞吐。** 网络越快，传图越划算；网络越慢，本地 OCR 越划算。
-   所以"本地 OCR 省电"**不可能**是无条件成立的命题——它是**有条件**的，条件就是网络状况。
-2. **存在"传图更省电、但本地 OCR 更快"的矛盾区。** 导师那句话里的两个命题
-   （"未必更省电" + "传输更快"）**可以同时为真，也可以一真一假**。必须分开测、分开答。
-3. **图越大、网络越慢、OCR 越快 → 越偏向本地 OCR。** 这给出了**可操作的杠杆**：
-   如果实测发现传图更优，我们还可以通过降低上传图像分辨率/质量来改变结论——
-   但那会损失下游 OCR 质量，是另一条权衡曲线。
+1. A break-even throughput necessarily exists. The faster the network, the better uploading
+   looks; the slower the network, the better local OCR looks. "Local OCR saves power" therefore
+   cannot be an unconditional claim. It is conditional, and the condition is the network.
+2. There is a band where uploading uses less energy while local OCR is still faster. The two
+   claims in the advisor's remark, that it may not save power and that uploading is faster, can
+   both be true, or one can be true and the other false. They have to be measured and answered
+   separately.
+3. Larger images, slower networks and faster OCR all push toward local OCR. That is an
+   actionable lever: if measurement favours uploading, the conclusion can still be changed by
+   lowering upload resolution or quality — at the cost of downstream OCR quality, which is a
+   different trade-off curve.
 
----
-
-## 5. 模拟验证：框架已跑通（⚠️ 数字是假的）
+## 5. Simulated run: the framework works
 
 ```bash
 .venv/bin/python scripts/power_compare_framework.py --trials 30 --meter mock
 .venv/bin/python scripts/power_compare_framework.py --crossover-only
 ```
 
-跑通证据：30 次触发 × 2 条路径 = **60 行结构化 CSV**，分项能耗、字节数、时延齐全；
-差值法逻辑走通（idle 采样 → 分段积分 → 扣本底）；交叉点分析给出两个盈亏平衡点。
+Evidence it runs: 30 triggers across 2 paths produced 60 rows of structured CSV with per
+component energy, byte counts and latency all present; the differential logic works end to end
+(idle sampling, per-segment integration, baseline subtraction); and the crossover analysis
+returns both break-even points.
 
-**模拟跑出来的"路径X 更省 203.7 mJ/次"这类结论，是占位参数的产物，不是发现。**
-换一组同样合理的占位参数，结论就会翻过来——这恰恰说明**为什么必须实测**。
+The simulated output saying something like "path X saves 203.7 mJ per trigger" is a product of
+the placeholder parameters, not a finding. A different but equally plausible set of placeholders
+flips it — which is exactly why this has to be measured for real.
 
----
+## 6. Swapping in real hardware
 
-## 6. 真机就绪后怎么替换（一个类）
-
-框架的全部"假"都集中在 `MockPowerMeter` + `MockParams` 两处。真机流程：
+Everything synthetic in the framework is confined to `MockPowerMeter` and `MockParams`. The real
+version is:
 
 ```python
 class INA219PowerMeter(PowerMeter):
     name, is_real = "ina219", True
-    def read_power_mw(self): ...       # 读 INA219 功率寄存器
+    def read_power_mw(self): ...       # read the INA219 power register
     def idle_baseline_mw(self, s=2.0): ...
 ```
 
-**其余代码（差值法、分段、CSV、交叉点分析）一行不用改。**
-`is_real=True` 后 CSV 的 `is_real` 列自动变真，报告才可以引用。
+Nothing else changes — the differential method, the segmentation, the CSV and the crossover
+analysis all stay as they are. Once `is_real=True`, the CSV's `is_real` column becomes true and
+the numbers may be cited.
 
-替换后要做的实测（= H1–H5）：
+Measurements to take once that is in place, H1 to H5:
 
-| # | 测什么 | 怎么测 |
+| # | What | How |
 |---|---|---|
-| H1 | 守门员常开基线 P_idle | 无触发窗口采 ≥2s，重复 5 次取稳定值 |
-| H2 | 路径X OCR 计算能耗 | 真跑 Tesseract 单帧，差值法 |
-| H3 | 路径X 传文本能耗 | 真传 ~1.4KB，含射频唤醒 |
-| H4 | 路径Y 传图能耗 | 真传 ~900KB，含射频唤醒 |
-| H5 | 两路端到端时延 | 同一 CSV 的 `latency_ms` 列 |
+| H1 | Gatekeeper always-on baseline, P_idle | Sample for at least 2 s in a no-trigger window, repeat 5 times, take the stable value |
+| H2 | Path X OCR compute energy | Run Tesseract on a real single frame, differential method |
+| H3 | Path X text transmission energy | Really transmit about 1.4 KB, including radio wake-up |
+| H4 | Path Y image transmission energy | Really transmit about 900 KB, including radio wake-up |
+| H5 | End-to-end latency for both paths | The `latency_ms` column of the same CSV |
 
-**实测协议要求**（避免测出没意义的数字）：
-- **两条路径交替跑**（X,Y,X,Y…），不要跑完 30 次 X 再跑 30 次 Y——否则板子温度/网络漂移会混进路径差异；
-- **至少 30 次触发/路径**，报中位数与四分位距（网络时延是长尾分布，均值会被少数极端值带偏）；
-- **记录网络状况**（同时测一次吞吐），因为结论**依赖**它——不记就无法解释结果；
-- 在**两种网络条件**下各测一轮（好 WiFi / 弱信号），直接验证 §4 的交叉点是否真实存在。
+Protocol requirements, so the numbers mean something:
 
----
+- Alternate the paths (X, Y, X, Y, ...). Do not run 30 X trials and then 30 Y trials, or board
+  temperature and network drift get folded into the path difference.
+- At least 30 triggers per path, reported as median and interquartile range. Network latency is
+  long-tailed and the mean is dragged by a few extreme values.
+- Record the network conditions, measuring throughput at the same time. The conclusion depends
+  on them, and without that record the result cannot be interpreted.
+- Run a round under two network conditions, good WiFi and weak signal, to test directly whether
+  the crossover in section 4 really exists.
 
-## 7. 诚实立场 / 本框架不回答的问题
+## 7. What this framework does not answer
 
-**立场：答案取决于实测，本轮不知道。** 框架的价值不在给答案，而在把一个模糊争论
-（"本地处理省电吧？"）变成**一个有明确交叉点、可被数据判定的问题**。
+The answer depends on measurements not yet taken. The value of the framework is not that it
+gives an answer, but that it turns a vague argument — "surely local processing saves power?" —
+into a question with a definite crossover that data can settle.
 
-明确**不在**本框架射程内的因素（回答导师时应主动说明，避免把功耗结论过度外推）：
+Factors explicitly outside its scope, which should be stated when discussing the result so the
+power conclusion is not over-extended:
 
-1. **隐私**：传图 = 把原始画面送出设备；传文本 = 只送 OCR 结果。这是**本项目"本地优先"的立项理由**，
-   即便功耗上传图更优，也不自动等于该改架构。**功耗是一个维度，不是唯一维度。**
-2. **离线可用性**：路径Y 断网即完全不可用；路径X 断网仍能产出 memory card 排队等联网
-   （`pipeline/` 已实现 pending 队列）。
-3. **云端 OCR 质量可能更高**：传图到云端可以用比 Tesseract 强得多的 OCR。这是路径Y 的**真实优势**，
-   与功耗无关，但会影响最终选型。
-4. **本框架只测"每次触发"的能耗**，不含常开守门员的持续功耗——那是**任务C** 的 Pareto 曲线在算
-   （见 `docs/pareto-method.md`），两者共用同一套能耗模型。
+1. Privacy. Uploading the image sends the raw frame off the device; uploading text sends only
+   the OCR result. Local-first is the founding reason for this project, so even if uploading
+   wins on power that does not automatically mean the architecture should change. Power is one
+   dimension, not the only one.
+2. Offline availability. Path Y is completely unusable without a network. Path X can still
+   produce a memory card and queue it for later (`pipeline/` already implements the pending
+   queue).
+3. Cloud OCR may be better. Sending the image allows OCR far stronger than Tesseract. That is a
+   real advantage for path Y, unrelated to power, and it will affect the final choice.
+4. This framework measures only per-trigger energy. It does not include the continuous draw of
+   the always-on gatekeeper, which is what the task C Pareto curve computes
+   (`docs/pareto-method.md`). Both share the same energy model.
 
----
-
-## 附：可复现命令
+## Appendix: commands
 
 ```bash
-# 模拟跑通（当前唯一可跑的模式，数字为假）
+# Simulated run, currently the only runnable mode. The numbers are not real
 .venv/bin/python scripts/power_compare_framework.py --trials 30 --meter mock
 
-# 交叉点分析（纯解析，不需要功耗计）
+# Crossover analysis, purely analytical, no meter required
 .venv/bin/python scripts/power_compare_framework.py --crossover-only
 
-# Pi + 功耗计就绪后（现在会明确报错并指向待办清单）
+# Once the Pi and meter are ready. Today this errors out and points at the to-do list
 python3 scripts/power_compare_framework.py --trials 30 --meter ina219
 ```

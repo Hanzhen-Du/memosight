@@ -1,10 +1,12 @@
-"""传输/上传接口层。
+"""The transport and upload interface layer.
 
-抽象基类 `UploadInterface`；本阶段实现 `DirectUploadMock`（树莓派直连模式的 mock）。
-未来可换成"经手机中转"的实现，管线其余部分不变。
+`UploadInterface` is the abstract base class. This phase implements `DirectUploadMock`, a mock
+of the Pi uploading directly. A phone-relay implementation can replace it later without
+changing the rest of the pipeline.
 
-约定：`upload(payload) -> MemoryCard`。直连实现内部调用 enricher 拿 tags，
-组装成一张 status=done 的完整 memory card 返回（尚未入库，由上层持久化）。
+Contract: `upload(payload) -> MemoryCard`. The direct implementation calls the enricher to get
+tags and returns a complete memory card with status=done. It does not persist the card; the
+layer above does that.
 """
 
 from .base import UploadInterface

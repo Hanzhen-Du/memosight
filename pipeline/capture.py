@@ -1,7 +1,9 @@
-"""守门员触发 + 高清抓帧（本阶段全 mock）。
+"""Gatekeeper trigger and full-resolution frame grab. Fully mocked in this phase.
 
-真系统里：常开的轻量守门员判断"是否值得记录"，触发才唤醒高清抓帧。
-本阶段：`MockGatekeeper` 给一个 mock 触发信号 + 置信度；高清帧用测试图片替代。
+In the real system a lightweight always-on gatekeeper decides whether something is worth
+recording, and only a trigger wakes the full-resolution grab.
+In this phase, `MockGatekeeper` supplies a mocked trigger signal and confidence, and a test
+image stands in for the full-resolution frame.
 """
 
 from __future__ import annotations
@@ -20,9 +22,10 @@ class TriggerSignal:
 
 
 class MockGatekeeper:
-    """mock 守门员：对给定输入返回触发信号。
+    """Mocked gatekeeper: returns a trigger signal for a given input.
 
-    默认恒触发（用于演示）；可设 threshold + 每次 confidence 决定是否触发。
+    Triggers unconditionally by default, which suits the demo. Setting a threshold plus a
+    per-call confidence makes the trigger conditional.
     """
 
     def __init__(self, threshold: float = 0.5):
@@ -33,10 +36,11 @@ class MockGatekeeper:
 
 
 def grab_frame(source_image: Path, frames_dir: Path, ts: Optional[str] = None) -> Path:
-    """模拟"高清抓帧"：把测试图片拷进 frames_dir，命名带时间戳。返回帧路径。"""
+    """Simulate a full-resolution grab by copying a test image into frames_dir with a
+    timestamped name. Returns the frame path."""
     source_image = Path(source_image)
     if not source_image.exists():
-        raise FileNotFoundError(f"测试图片不存在: {source_image}")
+        raise FileNotFoundError(f"test image does not exist: {source_image}")
     frames_dir = Path(frames_dir)
     frames_dir.mkdir(parents=True, exist_ok=True)
     stamp = (ts or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")).replace(":", "").replace("+", "")

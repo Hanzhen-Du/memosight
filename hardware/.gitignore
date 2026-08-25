@@ -1,4 +1,4 @@
-# 运行时产物（在 Pi/笔记本上生成），不入库。
+# Runtime output generated on the Pi or the laptop. Not committed.
 captures/
 outbox/
 received/

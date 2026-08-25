@@ -1,5 +1,5 @@
 {
-  "_说明": "阶段3.4 定向扩充关键词（概念彼此不同，避免与既有关键词命中同一批 Pexels 图）。偏重 FN 高发正例 + FP 高发硬负例。",
+  "_about": "Phase 3.4 targeted expansion keywords. The concepts are deliberately distinct from one another so they do not return the same batch of Pexels images as the existing keywords. Weighted toward the positives with high FN and the hard negatives with high FP.",
   "positive": [
     {"query": "webinar presentation screen", "count": 35},
     {"query": "online course lecture video", "count": 35},

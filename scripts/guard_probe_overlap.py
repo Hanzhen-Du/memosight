@@ -1,26 +1,38 @@
 #!/usr/bin/env python3
-"""探针—训练 双向零重叠守门 —— Task2 防泄漏硬门槛。
+"""Zero-overlap guard between the probes and the training set. A hard leakage gate for task 2.
 
-为什么需要它：`download_images.py` 的全局去重只在单个 `--output-root` 树内按 Pexels-ID 生效。
-Task2 的训练负/正例下载到 `data/raw`（去重基线只覆盖 data/raw），**看不到**两个探针目录
-（`data/probe_person_noscreen/`、`data/probe_person_screen/` 在 data/raw 之外），
-故新下载的训练图有可能与探针撞同一张 Pexels 图（或近重复）。探针是 held-out 评估集，
-任何训练图与之重叠都会污染 FP / 召回读数。
+Why it is needed: the global dedup in `download_images.py` only applies by Pexels ID within a
+single `--output-root` tree. Task 2's training negatives and positives are downloaded into
+`data/raw`, so the dedup baseline covers only `data/raw` and cannot see the two probe
+directories (`data/probe_person_noscreen/` and `data/probe_person_screen/` live outside
+`data/raw`). A newly downloaded training image could therefore collide with the same Pexels
+image, or a near-duplicate, in a probe. The probes are a held-out evaluation set, and any
+overlap contaminates the FP and recall figures.
 
-本脚本做的事：
-  1. 扫所有训练图（`data/raw/**`）与所有探针图（两个探针目录）。
-  2. 双判据找重叠（与 check_leakage 同口径）：
-     - Pexels-ID：文件名里 ≥6 位纯数字 token 相同 ⇒ 同一张图。
-     - 感知近重复：96×96 灰度 pHash 汉明 ≤ --phash-th 且 像素 Pearson 相关 ≥ --pixel-corr。
-  3. 命中的**训练**图 → **quarantine（移动到 `data/_quarantine_task2/`，不删除，保留原相对路径）**，
-     使探针保持完整 held-out；探针侧一张不动。打印逐条明细 + 机读结论行。
+What this script does:
+  1. Scan every training image under `data/raw/**` and every probe image in both probe
+     directories.
+  2. Find overlaps by two criteria, matching check_leakage:
+     - Pexels ID: an identical numeric token of 6 or more digits in the filename means the same
+       image.
+     - Perceptual near-duplicate: 96x96 greyscale pHash Hamming distance within --phash-th AND
+       pixel Pearson correlation at or above --pixel-corr.
+  3. Any matching TRAINING image is quarantined by moving it to `data/_quarantine_task2/`,
+     preserving its relative path, so the probes stay a complete held-out set. Nothing on the
+     probe side is touched. Per-item details plus a machine-readable conclusion line are
+     printed.
 
-口径：只动训练侧（探针是 gold holdout）。移动而非删除（可追溯、可恢复，遵守"不删 data/"红线）。
-默认 --dry-run=False 实跑；先 --dry-run 看清单再实跑更稳。
+Only the training side is modified, because the probes are the gold holdout. Images are moved
+rather than deleted, which keeps the change traceable and reversible and honours the rule
+against deleting anything under data/.
 
-依赖：opencv、numpy（已在 requirements.txt）。复用 scripts/check_leakage.py 的 phash64/popcount64。
+--dry-run is off by default, so the script acts. Running with --dry-run first to review the
+list is the safer sequence.
 
-示例：
+Dependencies: opencv and numpy, both already in requirements.txt. Reuses phash64 and popcount64
+from scripts/check_leakage.py.
+
+Examples:
   .venv/bin/python scripts/guard_probe_overlap.py --dry-run
   .venv/bin/python scripts/guard_probe_overlap.py
 """
@@ -36,14 +48,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from check_leakage import phash64, popcount64  # 全仓一致的哈希口径
+from check_leakage import phash64, popcount64  # one hash definition for the whole repository
 
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 INPUT_SIZE = 96
 
 
 def photo_ids(stem: str) -> set[str]:
-    """从文件名 stem 提取候选 Pexels 图片 id：≥6 位纯数字 token（与 probe_fp_test 同口径）。"""
+    """Extract candidate Pexels image ids from a filename stem: numeric tokens of 6 or more
+    digits, matching probe_fp_test."""
     return {t for t in re.split(r"[_\-.]", stem) if t.isdigit() and len(t) >= 6}
 
 
@@ -63,7 +76,8 @@ def load_gray96(path: Path) -> np.ndarray | None:
 
 
 def build_index(paths: list[Path]) -> dict:
-    """对一批图算 pHash + 中心化向量 + 范数（供向量化像素相关），并记录每图的 Pexels-id。"""
+    """For a batch of images, compute pHash, centred vectors and norms for the vectorised
+    pixel correlation, and record each image's Pexels id."""
     n = len(paths)
     flats = np.zeros((n, INPUT_SIZE * INPUT_SIZE), np.float32)
     phashes = np.zeros(n, np.uint64)
@@ -84,15 +98,16 @@ def build_index(paths: list[Path]) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="探针—训练 双向零重叠守门（命中训练图 → quarantine）。",
+    ap = argparse.ArgumentParser(description="Zero-overlap guard between probes and training. Matching "
+                                                "training images are quarantined.",
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--train-root", type=Path, default=Path("data/raw"))
     ap.add_argument("--probe-dir", type=Path, action="append",
-                    default=None, help="探针目录（可重复）；默认两个探针目录。")
+                    default=None, help="probe directory; may be repeated. Defaults to both probe directories.")
     ap.add_argument("--quarantine", type=Path, default=Path("data/_quarantine_task2"))
     ap.add_argument("--phash-th", type=int, default=6)
     ap.add_argument("--pixel-corr", type=float, default=0.90)
-    ap.add_argument("--dry-run", action="store_true", help="只报告，不移动")
+    ap.add_argument("--dry-run", action="store_true", help="report only; move nothing")
     args = ap.parse_args()
 
     probe_dirs = args.probe_dir or [Path("data/probe_person_noscreen"),
@@ -101,10 +116,10 @@ def main() -> int:
     probes: list[Path] = []
     for d in probe_dirs:
         probes += collect(d)
-    print(f"训练图 {len(train)} 张 @ {args.train_root}")
-    print(f"探针图 {len(probes)} 张 @ {[str(d) for d in probe_dirs]}")
+    print(f"{len(train)} training images at {args.train_root}")
+    print(f"{len(probes)} probe images at {[str(d) for d in probe_dirs]}")
     if not train or not probes:
-        print("训练或探针为空，无需核对。")
+        print("training set or probes are empty; nothing to check.")
         return 0
 
     pidx = build_index(probes)
@@ -115,7 +130,7 @@ def main() -> int:
         tids = photo_ids(tp.stem)
         id_hit = tids & probe_id_union
         if id_hit:
-            # 找到具体撞 id 的探针（取第一张）
+            # Find the probe that collides on this id, taking the first
             j = next((k for k, s in enumerate(pidx["ids"]) if tids & s), None)
             pp = pidx["paths"][j].name if j is not None else f"id={sorted(id_hit)[0]}"
             hits.append((tp, "pexels_id", pp, 1.0))
@@ -141,12 +156,13 @@ def main() -> int:
 
     n_id = sum(1 for h in hits if h[1] == "pexels_id")
     n_perc = sum(1 for h in hits if h[1] == "perceptual")
-    print(f"\n重叠命中：{len(hits)} 张训练图（Pexels-ID {n_id} / 感知近重复 {n_perc}）")
+    print(f"\noverlaps found: {len(hits)} training images "
+          f"({n_id} by Pexels ID, {n_perc} by perceptual near-duplicate)")
     for tp, reason, pp, corr in hits[:40]:
         rel = tp.relative_to(args.train_root)
         print(f"  [{reason}] data/raw/{rel}  ↔  {pp}  (corr={corr})")
     if len(hits) > 40:
-        print(f"  …(余 {len(hits) - 40} 条省略)")
+        print(f"  ...({len(hits) - 40} more omitted)")
 
     moved = 0
     if hits and not args.dry_run:
@@ -156,11 +172,11 @@ def main() -> int:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(tp), str(dst))
             moved += 1
-        print(f"\n已 quarantine（移动，不删除）{moved} 张 → {args.quarantine}/")
+        print(f"\nquarantined {moved} images by moving, not deleting, into {args.quarantine}/")
     elif hits:
-        print(f"\n(dry-run) 将 quarantine {len(hits)} 张到 {args.quarantine}/（未移动）")
+        print(f"\n(dry-run) would quarantine {len(hits)} images into {args.quarantine}/; nothing moved")
     else:
-        print("\n零重叠：训练集与两个探针集无任何撞图/近重复。✓")
+        print("\nZero overlap: no collisions or near-duplicates between the training set and either probe.")
 
     print(f"\nGUARD overlap_hits={len(hits)} id={n_id} perceptual={n_perc} "
           f"moved={moved} dry_run={args.dry_run}")

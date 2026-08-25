@@ -1,10 +1,12 @@
-"""端到端编排：串起全数据流。
+"""End-to-end orchestration: the whole data flow in one place.
 
-守门员触发(mock) → 高清帧(测试图) → 本地 OCR → 打包 → ingest(联网直存/断网入队)
-→ 按 raw_image_policy 处理原始帧 → 返回 memory card。
+Gatekeeper trigger (mocked) -> full-resolution frame (a test image) -> local OCR -> packaging
+-> ingest (store directly when online, queue when offline) -> apply raw_image_policy to the raw
+frame -> return the memory card.
 
-`build_pipeline()` 组装默认组件：OCR 优先用 Tesseract（装了二进制才用），
-否则回退 StubOCR，保证在二进制缺失时闭环仍可演示。
+`build_pipeline()` assembles the default components. OCR prefers Tesseract when the binary is
+installed and otherwise falls back to StubOCR, so the loop still demonstrates end to end
+without it.
 """
 
 from __future__ import annotations
@@ -51,31 +53,31 @@ class MemoSightPipeline:
         timestamp: Optional[str] = None,
         raw_image_policy: Optional[str] = None,
     ) -> Optional[MemoryCard]:
-        """跑一次完整捕捉。守门员不触发则返回 None。"""
+        """Run one full capture. Returns None if the gatekeeper does not fire."""
         policy = raw_image_policy or self.cfg.raw_image_policy
         ts = timestamp or utc_now_iso()
 
-        # 1. 守门员（mock 触发信号）
+        # 1. gatekeeper (mocked trigger signal)
         signal = self.gatekeeper.trigger(trigger_confidence)
         if not signal.should_record:
             return None
 
-        # 2. 高清抓帧（测试图替代）
+        # 2. full-resolution grab (a test image stands in)
         frame_path = grab_frame(source_image, self.cfg.frames_dir, ts=ts)
         try:
-            # 3. 本地 OCR
+            # 3. local OCR
             text = self.ocr.ocr(frame_path)
-            # 4. 打包 {ocr_text + 元数据}
+            # 4. package ocr_text plus metadata
             payload = build_payload(
                 ocr_text=text,
                 timestamp=ts,
                 trigger_confidence=signal.confidence,
                 raw_image_policy=policy,
             )
-            # 5. ingest：联网直存 / 断网入队
+            # 5. ingest: store directly when online, queue when offline
             card = self.ingest.ingest(payload)
         finally:
-            # 6. 隐私：按策略处理原始帧（即便出错也执行）
+            # 6. privacy: apply the policy to the raw frame, even if something above failed
             apply_raw_image_policy(frame_path, policy, self.cfg.cache_dir)
         return card
 
@@ -92,8 +94,9 @@ def build_pipeline(
     ocr: Optional[OCRInterface] = None,
     enricher: Optional[EnricherInterface] = None,
 ) -> MemoSightPipeline:
-    """组装默认管线。OCR 未指定时：有 tesseract 二进制→TesseractOCR，否则→StubOCR。"""
-    load_env()  # 从项目根 .env 加载环境变量/密钥（供未来真 enricher 用）
+    """Assemble the default pipeline. When no OCR is given, use TesseractOCR if the binary is
+    present, otherwise StubOCR."""
+    load_env()  # load environment variables and keys from the project-root .env, for the real enricher
     cfg = cfg or config_mod.default_config()
     cfg.ensure_dirs()
     store = CardStore(cfg.db_path)
@@ -102,7 +105,8 @@ def build_pipeline(
             ocr = TesseractOCR(lang=cfg.ocr_lang, max_side=cfg.ocr_max_side)
         else:
             ocr = StubOCR()
-    # 默认用 mock（离线安全，保证测试/无密钥环境可跑）；CLI 显式传真 CloudEnricher。
+    # Default to the mock, which is offline-safe so tests and keyless environments still run.
+    # The CLI passes a real enricher explicitly.
     enricher = enricher or MockCloudEnricher()
     transport = DirectUploadMock(enricher)
     connectivity = connectivity or ConnectivityMock(online=True)

@@ -1,7 +1,7 @@
-"""联网状态：可切换的 is_online() mock。
+"""Connectivity: a switchable is_online() mock.
 
-真实设备上这里会去 ping 网关/云端；本阶段用一个可手动切换的 mock，
-让测试能确定性地走"联网 / 断网 / 恢复"三条路径。
+On a real device this would ping the gateway or the cloud. In this phase it is a manually
+switchable mock, so tests can walk the online, offline and recovery paths deterministically.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 
 
 class Connectivity(ABC):
-    """联网探测抽象。"""
+    """Abstract connectivity probe."""
 
     @abstractmethod
     def is_online(self) -> bool:
@@ -18,7 +18,7 @@ class Connectivity(ABC):
 
 
 class ConnectivityMock(Connectivity):
-    """可手动切换的联网 mock。"""
+    """A connectivity mock that can be switched by hand."""
 
     def __init__(self, online: bool = True):
         self._online = online

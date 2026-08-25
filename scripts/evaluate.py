@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""守门员模型评估 —— 一键复评完整指标（accuracy/precision/recall/F1/混淆矩阵/FN/FP）。
+"""Gatekeeper evaluation: recompute the full metric set in one command (accuracy, precision,
+recall, F1, confusion matrix, FN, FP).
 
-加载一个已存的 .keras 模型 + 一个 split CSV，算出完整指标。正类=1=记。
-支持自定义决策阈值（对 softmax 的 p(记) 卡阈值，默认 0.5=argmax），供 Phase 3 压 FN。
-支持 --pr-sweep：扫一串阈值打印 precision/recall/F1/FN/FP 曲线表。
+Loads a saved .keras model and a split CSV and computes the full metrics. The positive class is
+1, meaning record.
+The decision threshold is configurable, applied to the softmax p(record), defaulting to 0.5
+which is equivalent to argmax. Phase 3 uses it to push FN down.
+--pr-sweep sweeps a range of thresholds and prints a precision/recall/F1/FN/FP table.
 
-每次改动模型后跑这个脚本即可一键复评，指标口径固定、可对比。
+Running this after any model change re-scores everything with a fixed, comparable measurement.
 
-依赖：tensorflow、numpy、pandas（无新增依赖）。复用 train.py 的数据加载。
+Dependencies: tensorflow, numpy, pandas. Nothing new. Reuses train.py's data loading.
 
-示例：
+Examples:
   .venv/bin/python scripts/evaluate.py --model models/gatekeeper_v1.keras \
       --val-csv data/processed/dedup_val.csv --test-csv data/processed/dedup_test.csv
   .venv/bin/python scripts/evaluate.py --model models/xx.keras \
@@ -29,7 +32,7 @@ from train import load_split, make_dataset
 
 
 def metrics_from_probs(probs: np.ndarray, y_true: np.ndarray, threshold: float) -> dict:
-    """对 p(记)=probs[:,1] 卡阈值，算完整指标。正类=1。"""
+    """Threshold p(record) = probs[:,1] and compute the full metrics. The positive class is 1."""
     p_pos = probs[:, 1]
     y_pred = (p_pos >= threshold).astype(np.int32)
     tn = int(((y_true == 0) & (y_pred == 0)).sum())
@@ -62,19 +65,19 @@ def predict_split(model: tf.keras.Model, csv: Path, data_root: Path,
 
 
 def print_metrics(name: str, m: dict) -> None:
-    print(f"\n===== {name}（阈值={m['threshold']}，正类=1=记）=====")
-    print(f"样本 {m['n']}（正 {m['n_pos']} / 负 {m['n_neg']}）")
+    print(f"\n===== {name} (threshold={m['threshold']}, positive class = 1 = record) =====")
+    print(f"samples: {m['n']} ({m['n_pos']} positive / {m['n_neg']} negative)")
     print(f"Accuracy {m['accuracy']:.4f} | Precision {m['precision']:.4f} | "
           f"Recall {m['recall']:.4f} | F1 {m['f1']:.4f}")
     print(f"FN rate {m['fn_rate']:.4f} | FP rate {m['fp_rate']:.4f}")
     c = m["confusion"]
-    print("混淆矩阵：           预测=不记(0)  预测=记(1)")
-    print(f"  真实=不记(0)         {c['tn']:>6}     {c['fp']:>6}")
-    print(f"  真实=记  (1)         {c['fn']:>6}     {c['tp']:>6}")
+    print("confusion matrix:      predicted 0   predicted 1")
+    print(f"  actual 0 (skip)      {c['tn']:>6}        {c['fp']:>6}")
+    print(f"  actual 1 (record)    {c['fn']:>6}        {c['tp']:>6}")
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="守门员模型完整指标复评。")
+    p = argparse.ArgumentParser(description="Recompute the full metric set for a gatekeeper model.")
     p.add_argument("--model", type=Path, required=True)
     p.add_argument("--data-root", type=Path, default=Path("data/processed"))
     p.add_argument("--val-csv", type=Path, default=None)
@@ -82,12 +85,12 @@ def main() -> int:
     p.add_argument("--size", type=int, default=96)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--threshold", type=float, default=0.5)
-    p.add_argument("--pr-sweep", action="store_true", help="扫阈值打印 PR/F1 曲线表")
+    p.add_argument("--pr-sweep", action="store_true", help="sweep thresholds and print a precision/recall/F1 table")
     p.add_argument("--json-out", type=Path, default=None)
     args = p.parse_args()
 
     model = tf.keras.models.load_model(args.model)
-    print(f"模型：{args.model}（参数 {model.count_params():,}）")
+    print(f"model: {args.model} ({model.count_params():,} parameters)")
 
     out = {"model": str(args.model), "threshold": args.threshold}
     for split_name, csv in (("val", args.val_csv), ("test", args.test_csv)):
@@ -95,13 +98,13 @@ def main() -> int:
             continue
         probs, labels = predict_split(model, csv, args.data_root, args.size, args.batch_size)
         m = metrics_from_probs(probs, labels, args.threshold)
-        tag = f"{split_name}（{'最终裁定' if split_name == 'test' else '调参用'}）"
+        tag = f"{split_name} ({'deciding' if split_name == 'test' else 'tuning'})"
         print_metrics(tag, m)
         out[split_name] = m
 
         if args.pr_sweep:
-            print(f"\n----- {split_name} 阈值扫描（找压 FN 的甜点）-----")
-            print(f"{'thr':>5} {'prec':>7} {'recall':>7} {'F1':>7} {'FN率':>7} {'FP率':>7}")
+            print(f"\n----- {split_name} threshold sweep, looking for the point that minimises FN -----")
+            print(f"{'thr':>5} {'prec':>7} {'recall':>7} {'F1':>7} {'FN':>7} {'FP':>7}")
             for t in np.arange(0.05, 1.0, 0.05):
                 mm = metrics_from_probs(probs, labels, float(t))
                 print(f"{t:>5.2f} {mm['precision']:>7.4f} {mm['recall']:>7.4f} "
@@ -110,7 +113,7 @@ def main() -> int:
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(json.dumps(out, ensure_ascii=False, indent=2))
-        print(f"\n指标 JSON 已写出：{args.json_out}")
+        print(f"\nmetrics JSON written to {args.json_out}")
     print("\nRESULT " + json.dumps(out, ensure_ascii=False))
     return 0
 

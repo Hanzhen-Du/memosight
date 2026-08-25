@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-"""守门员小 CNN —— 训练（参数化，供自主迭代修复塌缩）。
+"""Gatekeeper CNN training. Parameterised, so iterating never requires editing the code.
 
-流程：
-  1. 从 train/val(/test).csv 用 tf.data 加载 96×96 灰度 PNG，像素归一化到 [0,1]。
-  2. (可选) 轻量数据增强：水平翻转 + 小幅亮度/对比度抖动（仅 train）。
-  3. class_weight(balanced) 处理不平衡，不下采样。
-  4. 损失 sparse_categorical_crossentropy，优化器 Adam。
-  5. EarlyStopping(restore_best_weights) + ModelCheckpoint(存最优)。
-  6. 训完在 val(及可选 test) 上算：准确率、FN rate、FP rate、混淆矩阵、
-     **预测分布(确认两类都有、没塌缩)**。打印 + 输出一行 RESULT <json> 便于解析。
+Steps:
+  1. Load 96x96 greyscale PNGs from train/val(/test).csv with tf.data, normalising pixels to
+     [0,1].
+  2. Optional light augmentation: horizontal flip plus small brightness and contrast jitter,
+     applied to train only.
+  3. class_weight="balanced" handles the imbalance; nothing is downsampled.
+  4. sparse_categorical_crossentropy loss with the Adam optimiser.
+  5. EarlyStopping with restore_best_weights, plus ModelCheckpoint saving the best model.
+  6. After training, compute accuracy, FN rate, FP rate, the confusion matrix and the
+     prediction distribution on val and optionally test. The prediction distribution confirms
+     both classes are predicted and the model has not collapsed. Everything is printed, and a
+     single RESULT <json> line is emitted for easy parsing.
 
-所有授权可调旋钮都走命令行参数，迭代时只改参数、不改代码结构。
+Every tunable knob is a command-line argument, so iterating changes parameters rather than
+code structure.
 
-依赖：tensorflow==2.19.*、pandas、numpy。
+Dependencies: tensorflow==2.19.*, pandas, numpy.
 
-示例（第一轮修复组合）：
+Example, the first round of fixes combined:
   python scripts/train.py --bn-momentum 0.9 --patience 15 \
       --start-from-epoch 20 --epochs 80 --tag r1 --eval-test
 """
@@ -29,7 +34,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from model import build_model  # 同目录 scripts/model.py
+from model import build_model  # scripts/model.py, in the same directory
 
 AUTOTUNE = tf.data.AUTOTUNE
 
@@ -50,7 +55,8 @@ def make_dataset(
     seed: int,
     augment: bool = False,
 ) -> tf.data.Dataset:
-    """读 PNG → 灰度 → [0,1] →(可选 cache/打乱/增强)→ batch。"""
+    """Read PNG, greyscale, normalise to [0,1], optionally cache, shuffle and augment, then
+    batch."""
 
     def _load(path, label):
         img = tf.io.read_file(path)
@@ -60,7 +66,8 @@ def make_dataset(
         return img, label
 
     def _augment(img, label):
-        # 轻量增强：水平翻转 + 小幅亮度/对比度抖动；抖动后 clip 回 [0,1]。
+        # Light augmentation: horizontal flip plus small brightness and contrast jitter,
+        # clipped back to [0,1] afterwards.
         img = tf.image.random_flip_left_right(img)
         img = tf.image.random_brightness(img, max_delta=0.10)
         img = tf.image.random_contrast(img, lower=0.85, upper=1.15)
@@ -69,7 +76,8 @@ def make_dataset(
 
     ds = tf.data.Dataset.from_tensor_slices((paths, labels))
     ds = ds.map(_load, num_parallel_calls=AUTOTUNE)
-    ds = ds.cache()  # 解码一次缓存（增强在 cache 之后，保证每 epoch 不同）
+    ds = ds.cache()  # decode once and cache; augmentation happens after the cache so each
+                     # epoch differs
     if shuffle:
         ds = ds.shuffle(len(paths), seed=seed, reshuffle_each_iteration=True)
     if augment:
@@ -85,7 +93,8 @@ def compute_class_weight(labels: np.ndarray) -> dict[int, float]:
 
 
 def evaluate(model: tf.keras.Model, ds: tf.data.Dataset, y_true: np.ndarray) -> dict:
-    """算 acc/FN rate/FP rate/混淆矩阵/预测分布（正类=1=记）。返回 dict。"""
+    """Compute accuracy, FN rate, FP rate, the confusion matrix and the prediction
+    distribution. The positive class is 1, meaning record. Returns a dict."""
     probs = model.predict(ds, verbose=0)
     y_pred = probs.argmax(axis=1)
     tn = int(((y_true == 0) & (y_pred == 0)).sum())
@@ -102,28 +111,28 @@ def evaluate(model: tf.keras.Model, ds: tf.data.Dataset, y_true: np.ndarray) -> 
         "fn_rate": round(fn / (tp + fn), 4) if (tp + fn) else 0.0,
         "fp_rate": round(fp / (fp + tn), 4) if (fp + tn) else 0.0,
         "confusion": {"tn": tn, "fp": fp, "fn": fn, "tp": tp},
-        "pred_dist": pred_dist,  # [预测为0的数, 预测为1的数]
+        "pred_dist": pred_dist,  # [count predicted 0, count predicted 1]
         "collapsed": (pred_dist[0] == 0 or pred_dist[1] == 0),
     }
 
 
 def print_eval(name: str, m: dict) -> None:
-    print(f"\n===== {name} 评估（正类=1=记）=====")
-    print(f"样本数：{m['n']}（正 {m['n_pos']} / 负 {m['n_neg']}）")
-    print(f"预测分布 [判不记0, 判记1]：{m['pred_dist']}  "
-          f"{'*** 塌缩! ***' if m['collapsed'] else '(两类都有，未塌缩)'}")
-    print(f"准确率 Accuracy : {m['accuracy']:.4f}")
-    print(f"漏报率 FN rate  : {m['fn_rate']:.4f}")
-    print(f"误报率 FP rate  : {m['fp_rate']:.4f}")
+    print(f"\n===== {name} evaluation (positive class = 1 = record) =====")
+    print(f"samples: {m['n']} ({m['n_pos']} positive / {m['n_neg']} negative)")
+    print(f"prediction distribution [predicted 0, predicted 1]: {m['pred_dist']}  "
+          f"{'*** COLLAPSED ***' if m['collapsed'] else '(both classes present, no collapse)'}")
+    print(f"accuracy : {m['accuracy']:.4f}")
+    print(f"FN rate  : {m['fn_rate']:.4f}")
+    print(f"FP rate  : {m['fp_rate']:.4f}")
     c = m["confusion"]
-    print("混淆矩阵：           预测=不记(0)  预测=记(1)")
-    print(f"  真实=不记(0)         {c['tn']:>6}     {c['fp']:>6}")
-    print(f"  真实=记  (1)         {c['fn']:>6}     {c['tp']:>6}")
+    print("confusion matrix:      predicted 0   predicted 1")
+    print(f"  actual 0 (skip)      {c['tn']:>6}        {c['fp']:>6}")
+    print(f"  actual 1 (record)    {c['fn']:>6}        {c['tp']:>6}")
 
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="守门员小 CNN 训练（参数化）。",
+        description="Train the gatekeeper CNN, fully parameterised.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--data-root", type=Path, default=Path("data/processed"))
@@ -143,7 +152,7 @@ def main() -> int:
     p.add_argument("--class-weight", choices=["balanced", "none"], default="balanced")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--tag", type=str, default="run")
-    p.add_argument("--eval-test", action="store_true", help="训完也在 test 上复核")
+    p.add_argument("--eval-test", action="store_true", help="also evaluate on test after training")
     args = p.parse_args()
 
     tf.keras.utils.set_random_seed(args.seed)
@@ -180,7 +189,7 @@ def main() -> int:
     hist = model.fit(train_ds, validation_data=val_ds, epochs=args.epochs,
                      class_weight=class_weight, callbacks=callbacks, verbose=2)
 
-    # best epoch（按 monitor）
+    # best epoch, according to the monitored metric
     mon = hist.history.get(args.monitor, [])
     best_epoch = (int(np.argmax(mon)) if mode == "max" else int(np.argmin(mon))) + 1 if mon else None
     stopped_epoch = len(mon)
@@ -196,7 +205,7 @@ def main() -> int:
         test_m = evaluate(model, test_ds, test_labels)
         print_eval("test", test_m)
 
-    print(f"\n最优模型已存：{ckpt_path}（best epoch={best_epoch}, 共训 {stopped_epoch} epoch）")
+    print(f"\nbest model saved to {ckpt_path} (best epoch={best_epoch}, {stopped_epoch} epochs run)")
 
     result = {
         "tag": args.tag,

@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
-"""路径X vs 路径Y 真实对比：同一批图，两条管线各跑一遍，结果存独立测试库。
+"""Path X against path Y, measured for real: run the same images through both pipelines and
+store the results in a separate test database.
 
-    路径X（现有管线）：图 → 真 Tesseract OCR（enhance=False）→ 真 DeepSeek 打标 → memory card
-    路径Y（新方案）  ：图 → resize≤1024 → base64 → 真 Claude 多模态 → 完整 card
-                       {description, tags, extracted_text}
+    Path X (the existing pipeline): image -> real Tesseract OCR (enhance=False) -> real DeepSeek
+                                    tagging -> memory card
+    Path Y (the proposed change):   image -> resize to 1024 or less -> base64 -> real Claude
+                                    multimodal -> complete card
 
-用途：给导师的架构决策材料（"未来要记的不只文字，是否该改成直接传图？"）。
-**本脚本不改管线默认行为**，只是把两条路径并排跑一遍、如实记录。
+Purpose: material for the architecture decision, given that what needs recording in future is
+not only text, so the question is whether to send the image directly.
+This script does not change the pipeline's default behaviour. It runs both paths side by side
+and records what happened.
 
-用法：
-  .venv/bin/python scripts/compare_paths_xy.py                  # 跑全部 10 张
-  .venv/bin/python scripts/compare_paths_xy.py --limit 2        # 先小规模试跑（省钱）
-  .venv/bin/python scripts/compare_paths_xy.py --only-y         # 只补跑路径Y
+Usage:
+  .venv/bin/python scripts/compare_paths_xy.py                  # run all 10 images
+  .venv/bin/python scripts/compare_paths_xy.py --limit 2        # small trial run first, to limit cost
+  .venv/bin/python scripts/compare_paths_xy.py --only-y         # re-run path Y only
 
-安全 / 成本：
-- 独立测试库 data/mvp_demo/comparison_xy.db，**不写正式 memory 库**。
-- 调用量硬上限 = 图数 × 2（路径X 一次 DeepSeek + 路径Y 一次 Claude），跑前打印、跑后核对。
-- 源图只读（grab_frame 拷贝副本；VisionEnricher 只 imread），demo/images/ 绝不改动。
-- 每张图两路都有 try/except，单图失败不中断整批，错误如实记进库。
+Safety and cost:
+- A separate test database, data/mvp_demo/comparison_xy.db. The production memory database is
+  never written to.
+- Hard call ceiling of image count x 2 (one DeepSeek call for path X, one Claude call for path
+  Y), printed before the run and checked afterwards.
+- Source images are read-only: grab_frame copies them and VisionEnricher only imreads, so
+  demo/images/ is never modified.
+- Both paths are wrapped in try/except per image, so one failure does not stop the batch and
+  the error is recorded as it happened.
 """
 
 from __future__ import annotations
@@ -49,31 +57,32 @@ IMG_DIR = REPO_ROOT / "demo" / "images"
 DB_PATH = REPO_ROOT / "data" / "mvp_demo" / "comparison_xy.db"
 IMG_EXTS = (".jpg", ".jpeg", ".png")
 
-# 对比结果表：一行 = 一张图 × 两条路径。与 CardStore 的 memory_cards 共存于同一 db 文件
-# （路径X 仍然真的走完整管线写 memory_cards；本表是给 HTML 用的、按图名对齐的汇总视图）。
+# Comparison table: one row per image, covering both paths. It lives in the same database file
+# as CardStore's memory_cards. Path X still runs the full pipeline and writes memory_cards; this
+# table is a summary view aligned by image name, for the HTML report.
 COMPARISON_SCHEMA = """
 CREATE TABLE IF NOT EXISTS comparison (
     image_name       TEXT PRIMARY KEY,
-    -- 路径X（Tesseract OCR + DeepSeek）
-    x_card_id        INTEGER,          -- memory_cards.id（路径X 真管线产出的卡）
+    -- path X (Tesseract OCR plus DeepSeek)
+    x_card_id        INTEGER,          -- memory_cards.id, the card the real path-X pipeline produced
     x_ocr_text       TEXT,
-    x_tags           TEXT,             -- JSON 数组；NULL = 未生成
+    x_tags           TEXT,             -- JSON array; NULL means not generated
     x_status         TEXT,             -- done / pending / error / config-error
     x_error          TEXT,
-    x_seconds        REAL,             -- 端到端墙钟耗时（本机 + 当前网络，非 Pi 实测）
-    -- 路径Y（Claude 多模态）
+    x_seconds        REAL,             -- end-to-end wall clock on this machine and network, not the Pi
+    -- path Y (Claude multimodal)
     y_description    TEXT,
-    y_tags           TEXT,             -- JSON 数组
+    y_tags           TEXT,             -- JSON array
     y_extracted_text TEXT,
     y_parse_ok       INTEGER,
     y_refusal        INTEGER,
     y_status         TEXT,             -- done / error / config-error
     y_error          TEXT,
-    y_raw_output     TEXT,             -- 解析失败时留档诊断
+    y_raw_output     TEXT,             -- kept for diagnosis when parsing fails
     y_in_tokens      INTEGER,
     y_out_tokens     INTEGER,
     y_cost_usd       REAL,
-    y_image_bytes    INTEGER,          -- resize+JPEG 后真正发出去的字节数
+    y_image_bytes    INTEGER,          -- bytes actually sent, after resize and JPEG encoding
     y_seconds        REAL,
     created_at       TEXT
 );
@@ -90,7 +99,8 @@ def open_db(path: Path) -> sqlite3.Connection:
 
 
 def upsert(conn: sqlite3.Connection, image_name: str, **fields) -> None:
-    """按 image_name upsert 指定列（只更新传入的列，另一条路径的列不动）。"""
+    """Upsert the given columns by image_name, touching only the columns passed in and leaving
+    the other path's columns alone."""
     conn.execute(
         "INSERT OR IGNORE INTO comparison (image_name, created_at) VALUES (?, ?)",
         (image_name, utc_now_iso()),
@@ -111,10 +121,11 @@ def list_images(folder: Path) -> list[Path]:
     )
 
 
-# ---------- 路径X ----------
+# ---------- path X ----------
 
 def run_path_x(images: list[Path], conn: sqlite3.Connection) -> int:
-    """现有管线：Tesseract OCR(enhance=False) → DeepSeek 打标 → 存 memory_cards。返回调用次数。"""
+    """The existing pipeline: Tesseract OCR with enhance=False, DeepSeek tagging, stored to
+    memory_cards. Returns the number of calls made."""
     cfg = config_mod.Config(
         db_path=DB_PATH,
         frames_dir=REPO_ROOT / "data" / "mvp_demo" / "cmp_frames",
@@ -125,7 +136,7 @@ def run_path_x(images: list[Path], conn: sqlite3.Connection) -> int:
         connectivity=ConnectivityMock(online=True),
         enricher=DeepSeekEnricher(),
     )
-    print(f"路径X: OCR={pipe.ocr.name}(enhance={getattr(pipe.ocr, 'enhance', 'n/a')}) "
+    print(f"path X: OCR={pipe.ocr.name}(enhance={getattr(pipe.ocr, 'enhance', 'n/a')}) "
           f"| enricher={pipe.ingest.transport.enricher.name}")
     calls = 0
     for i, img in enumerate(images, 1):
@@ -133,7 +144,7 @@ def run_path_x(images: list[Path], conn: sqlite3.Connection) -> int:
         rec: dict = {"x_status": "?", "x_error": None}
         try:
             card = pipe.capture(img, trigger_confidence=0.9)
-            calls += 1  # 真正尝试了一次 DeepSeek 调用
+            calls += 1  # one DeepSeek call was actually attempted
             rec.update(
                 x_card_id=card.id,
                 x_ocr_text=card.ocr_text or "",
@@ -143,25 +154,26 @@ def run_path_x(images: list[Path], conn: sqlite3.Connection) -> int:
         except EnricherConfigError as e:
             calls += 1
             rec.update(x_status="config-error", x_error=str(e)[:300])
-        except Exception as e:  # 抓帧 / OCR 等异常，如实记录
+        except Exception as e:  # frame grab, OCR and similar failures, recorded as they are
             rec.update(x_status="error", x_error=f"{type(e).__name__}: {e}"[:300])
         rec["x_seconds"] = round(time.monotonic() - t0, 3)
         upsert(conn, img.name, **rec)
         ntags = len(json.loads(rec["x_tags"])) if rec.get("x_tags") else 0
         print(f"  [X {i}/{len(images)}] {img.name[:44]:<46} status={rec['x_status']:<8} "
-              f"ocr={len(rec.get('x_ocr_text') or '')}字符 tags={ntags} ({rec['x_seconds']}s)")
+              f"ocr={len(rec.get('x_ocr_text') or '')} chars tags={ntags} ({rec['x_seconds']}s)")
         if rec["x_error"]:
             print(f"      ! {rec['x_error'][:120]}")
     pipe.close()
     return calls
 
 
-# ---------- 路径Y ----------
+# ---------- path Y ----------
 
 def run_path_y(images: list[Path], conn: sqlite3.Connection) -> int:
-    """新方案：图 → VisionEnricher（Claude 多模态）→ 完整 card。返回调用次数。"""
+    """The proposed change: image to VisionEnricher (Claude multimodal) to a complete card.
+    Returns the number of calls made."""
     enr = VisionEnricher()
-    print(f"路径Y: enricher={enr.name} | model={enr.model} | max_side={enr.max_side} "
+    print(f"path Y: enricher={enr.name} | model={enr.model} | max_side={enr.max_side} "
           f"| max_tokens={enr.max_tokens}")
     calls = 0
     for i, img in enumerate(images, 1):
@@ -204,7 +216,7 @@ def run_path_y(images: list[Path], conn: sqlite3.Connection) -> int:
     return calls
 
 
-# ---------- 汇总 ----------
+# ---------- summary ----------
 
 def summarize(conn: sqlite3.Connection) -> None:
     rows = list(conn.execute("SELECT * FROM comparison ORDER BY image_name"))
@@ -231,21 +243,22 @@ def summarize(conn: sqlite3.Connection) -> None:
     x_text_bytes = sum(len((r["x_ocr_text"] or "").encode("utf-8")) for r in rows)
 
     print("\n" + "=" * 96)
-    print("对比统计")
+    print("Comparison statistics")
     print("=" * 96)
-    print(f"图片总数: {total}")
-    print(f"路径X  端到端 done: {x_done}/{total} | 产出非空标签: {x_tagged}/{total}")
-    print(f"路径Y  调用成功  : {y_done}/{total} | 产出有效内容: {y_content}/{total} "
-          f"| 非空标签: {y_tagged}/{total}")
-    print(f"Y 在「X 无标签」的 {total - x_tagged} 张图上救回: {rescued}")
-    print(f"两路都没产出: {both_fail}")
+    print(f"images: {total}")
+    print(f"path X  end-to-end done: {x_done}/{total} | non-empty tags: {x_tagged}/{total}")
+    print(f"path Y  calls succeeded: {y_done}/{total} | usable content: {y_content}/{total} "
+          f"| non-empty tags: {y_tagged}/{total}")
+    print(f"images where X produced no tags: {total - x_tagged}; Y rescued {rescued} of them")
+    print(f"neither path produced anything: {both_fail}")
     print("-" * 96)
-    print(f"路径Y 成本（实测 token）: 输入 {in_tok:,} tok + 输出 {out_tok:,} tok "
-          f"= ${cost:.4f}（单价 ${PRICE_IN_PER_MTOK}/${PRICE_OUT_PER_MTOK} 每百万）")
+    print(f"path Y cost from measured tokens: {in_tok:,} in + {out_tok:,} out "
+          f"= ${cost:.4f} (at ${PRICE_IN_PER_MTOK}/${PRICE_OUT_PER_MTOK} per million)")
     if total:
-        print(f"  单张均摊: ${cost/total:.5f}  |  推算 1000 张: ${cost/total*1000:.2f}")
-    print(f"传输字节: 路径Y 图 {img_bytes/1024:.0f} KB  vs  路径X 文本 {x_text_bytes/1024:.1f} KB "
-          f"（{img_bytes/max(x_text_bytes,1):.0f}×）")
+        print(f"  per image: ${cost/total:.5f}  |  extrapolated to 1000: ${cost/total*1000:.2f}")
+    print(f"bytes uploaded: path Y images {img_bytes/1024:.0f} KB against path X text "
+          f"{x_text_bytes/1024:.1f} KB "
+          f"({img_bytes/max(x_text_bytes,1):.0f}x)")
     print("=" * 96)
 
 
@@ -253,11 +266,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default=str(IMG_DIR))
     ap.add_argument("--db", default=str(DB_PATH))
-    ap.add_argument("--limit", type=int, default=None, help="只跑前 N 张（小规模试跑省钱）")
+    ap.add_argument("--limit", type=int, default=None, help="run only the first N images, as a cheap trial")
     ap.add_argument("--start", type=int, default=0,
-                    help="从第 N 张开始（配合 --limit 分批跑，避免重跑已完成的图重复花钱）")
-    ap.add_argument("--only-x", action="store_true", help="只跑路径X")
-    ap.add_argument("--only-y", action="store_true", help="只跑路径Y")
+                    help="start from image N. With --limit this runs in batches, avoiding paying twice for "
+                         "images already done")
+    ap.add_argument("--only-x", action="store_true", help="run path X only")
+    ap.add_argument("--only-y", action="store_true", help="run path Y only")
     args = ap.parse_args()
 
     all_images = list_images(Path(args.dir))
@@ -265,13 +279,13 @@ def main() -> None:
     if args.limit:
         images = images[: args.limit]
     if not images:
-        sys.exit(f"没有找到图片: {args.dir}")
+        sys.exit(f"no images found: {args.dir}")
 
     do_x = not args.only_y
     do_y = not args.only_x
     budget = len(images) * (int(do_x) + int(do_y))
-    print(f"图片 {len(images)} 张（{args.dir}，共 {len(all_images)} 张，从第 {args.start} 张起）")
-    print(f"调用预算上限: {len(images)} × {int(do_x) + int(do_y)} 路 = {budget} 次\n")
+    print(f"{len(images)} images from {args.dir} ({len(all_images)} total, starting at {args.start})")
+    print(f"call budget ceiling: {len(images)} x {int(do_x) + int(do_y)} paths = {budget}\n")
 
     conn = open_db(Path(args.db))
     calls = 0
@@ -282,9 +296,9 @@ def main() -> None:
         calls += run_path_y(images, conn)
 
     summarize(conn)
-    print(f"\n实际调用次数: {calls}（预算 {budget}）"
-          f"{' ✓ 未超' if calls <= budget else ' ⚠ 超预算！'}")
-    print(f"结果库: {args.db}")
+    print(f"\ncalls actually made: {calls} (budget {budget})"
+          f"{' - within budget' if calls <= budget else ' - OVER BUDGET'}")
+    print(f"results database: {args.db}")
     conn.close()
 
 

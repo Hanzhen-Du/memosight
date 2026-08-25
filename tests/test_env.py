@@ -1,4 +1,4 @@
-"""密钥/.env 加载测试。用临时 .env，绝不读真实密钥值。"""
+"""Tests for key and .env loading. Uses a temporary .env and never reads a real key value."""
 
 import os
 import tempfile
@@ -41,7 +41,7 @@ class TestEnvLoader(unittest.TestCase):
         with mock.patch.object(env_mod, "DOTENV_PATH", Path("/no/such/.env")), \
              mock.patch.dict(os.environ, {}, clear=True):
             _reset_loaded()
-            env_mod.load_env(override=True)  # 不应抛错
+            env_mod.load_env(override=True)  # must not raise
             self.assertIsNone(os.environ.get("ANTHROPIC_API_KEY"))
 
     def test_get_anthropic_key_reads_env(self):
@@ -58,12 +58,13 @@ class TestEnvLoader(unittest.TestCase):
                 env_mod.require_anthropic_api_key()
 
     def test_no_hardcoded_key_in_source(self):
-        # 防呆：源码里不得出现真实密钥前缀
+        # Guard: no real key prefix may appear in the source
         src = Path(env_mod.__file__).read_text()
         self.assertNotIn("sk-ant-", src)
 
     def test_no_real_key_leaked_in_pipeline_source(self):
-        # 强守卫：真实 ANTHROPIC/DEEPSEEK 密钥值绝不出现在任何 pipeline 源码里。
+        # Strong guard: a real ANTHROPIC or DEEPSEEK key value must never appear in any
+        # pipeline source file.
         import pipeline
         from pipeline.env import get_anthropic_api_key, get_deepseek_api_key
 
@@ -73,9 +74,9 @@ class TestEnvLoader(unittest.TestCase):
         )
         for getter in (get_anthropic_api_key, get_deepseek_api_key):
             val = getter()
-            if val:  # 有配置密钥时，断言它没被硬编码进源码
+            if val:  # when a key is configured, assert it was not hardcoded into the source
                 self.assertNotIn(val, sources)
-        # 防呆：不得出现明文密钥前缀字面量
+        # Guard: no plaintext key-prefix literal may appear
         self.assertNotIn("sk-ant-", sources)
 
 

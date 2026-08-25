@@ -1,8 +1,9 @@
-"""打包逻辑：把 OCR 文本 + 元数据组装成一个可上传/可入队的 payload。
+"""Packaging: assemble OCR text plus metadata into a payload that can be uploaded or queued.
 
-payload = { ocr_text + 元数据(timestamp / trigger_confidence / raw_image_policy) }
-这是"守门员+OCR 免费提供"的部分；tags 不在 payload 里——tags 由云端 enricher 生成后
-才补上，构成完整 memory card。
+payload = ocr_text plus metadata (timestamp, trigger_confidence, raw_image_policy)
+
+This is the part the gatekeeper and OCR provide for free. tags are not in the payload; they are
+added after the cloud enricher generates them, which completes the memory card.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from . import config
 
 @dataclass
 class Payload:
-    """待 enrich 的打包数据（尚无 tags）。"""
+    """Packaged data awaiting enrichment; it has no tags yet."""
 
     ocr_text: str
     timestamp: str
@@ -23,7 +24,7 @@ class Payload:
     raw_image_policy: str = config.POLICY_DELETE
 
     def metadata(self) -> dict[str, Any]:
-        """交给 enricher 的元数据（不含 ocr_text 本身）。"""
+        """The metadata handed to the enricher, excluding ocr_text itself."""
         return {
             "timestamp": self.timestamp,
             "trigger_confidence": self.trigger_confidence,
@@ -40,9 +41,9 @@ def build_payload(
     trigger_confidence: float,
     raw_image_policy: str = config.POLICY_DELETE,
 ) -> Payload:
-    """组装 payload。校验 raw_image_policy 合法。"""
+    """Assemble a payload, validating raw_image_policy."""
     if raw_image_policy not in config.VALID_RAW_IMAGE_POLICIES:
-        raise ValueError(f"raw_image_policy 非法: {raw_image_policy!r}")
+        raise ValueError(f"invalid raw_image_policy: {raw_image_policy!r}")
     return Payload(
         ocr_text=ocr_text,
         timestamp=timestamp,

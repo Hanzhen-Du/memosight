@@ -1,12 +1,13 @@
-"""Tesseract 真引擎（封装在 OCRInterface 之后）。
+"""The real Tesseract engine, behind OCRInterface.
 
-依赖：
-- Python 包 `pytesseract`（已在 venv 安装）。
-- 系统二进制 `tesseract` + 语言数据（apt 安装，需 sudo）：
+Dependencies:
+- the Python package `pytesseract`, already installed in the venv;
+- the `tesseract` system binary plus language data, installed with apt and needing sudo:
     sudo apt install tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
 
-若二进制缺失，构造时不报错（便于导入模块），调用 ocr() 时才抛出清晰错误；
-`tesseract_available()` 可先行探测，管线据此回退到 StubOCR。
+If the binary is missing, construction still succeeds so the module stays importable, and
+calling ocr() raises a clear error instead. `tesseract_available()` probes for it in advance,
+which is how the pipeline decides to fall back to StubOCR.
 """
 
 from __future__ import annotations
@@ -20,10 +21,10 @@ from .base import ImageInput, OCRInterface, preprocess, preprocess_enhanced
 
 
 def tesseract_available() -> bool:
-    """系统是否装了 tesseract 二进制。"""
+    """Whether the tesseract binary is installed on this system."""
     if shutil.which("tesseract"):
         return True
-    # pytesseract 也可能配了显式路径
+    # pytesseract may also have an explicit path configured
     try:
         pytesseract.get_tesseract_version()
         return True
@@ -32,7 +33,7 @@ def tesseract_available() -> bool:
 
 
 class TesseractOCR(OCRInterface):
-    """基于 Tesseract 的 OCR。中文简体+英文默认。"""
+    """Tesseract-based OCR. Defaults to simplified Chinese plus English."""
 
     name = "tesseract"
 
@@ -44,11 +45,15 @@ class TesseractOCR(OCRInterface):
         cmd: Optional[str] = None,
         enhance: bool = False,
     ):
-        # lang: tesseract 语言代码；psm 6 = 假设为一整块统一文本（白板/文档友好）
-        # enhance: 增强预处理（deskew + 自适应二值化 + 小字放大）。**默认关**：
-        #   2026-07-06 在 10 张 Pexels 正例图上实测，增强对"干净截图/扫描"反而变差
-        #   （Tesseract 自带二值化，强加自适应阈值+纠斜+放大引入噪声），净负面。
-        #   仅对低质/斜角/眩光的脏图可能有用，留作 opt-in，等真实脏帧再验证（见 `docs/pipeline-architecture.md` 的 backlog）。
+        # lang is the tesseract language code. psm 6 assumes a single uniform block of text,
+        # which suits whiteboards and documents.
+        # enhance turns on the enhanced preprocessing (deskew, adaptive threshold, upscaling
+        #   small text). It is OFF by default. Measured on 2026-07-06 across 10 Pexels
+        #   positives, enhancement made clean screenshots and scans worse, not better:
+        #   Tesseract already binarises, and forcing an adaptive threshold plus deskew plus
+        #   upscaling introduces noise. Net negative. It may still help low-quality, angled or
+        #   glare-heavy frames, so it stays available as opt-in pending a test on real captured
+        #   frames (see the backlog in `docs/pipeline-architecture.md`).
         self.lang = lang
         self.max_side = max_side
         self.psm = psm
@@ -59,7 +64,7 @@ class TesseractOCR(OCRInterface):
     def ocr(self, image: ImageInput) -> str:
         if not tesseract_available():
             raise RuntimeError(
-                "tesseract 二进制未安装。请先执行：\n"
+                "the tesseract binary is not installed. Run:\n"
                 "  sudo apt install tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng"
             )
         if self.enhance:

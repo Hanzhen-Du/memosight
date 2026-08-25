@@ -1,10 +1,10 @@
 {
-  "_comment": "Task2 held-out 探针：【有人 + 有可读屏幕/白板/PPT/代码屏】的正例场景（GT=记=1）。用于『防矫枉过正』自检——确认修复后模型没学成『见人就忽略』，即有人但确有屏幕文字时仍能召回。",
-  "_holdout_guard": "这是 held-out 评估集，【绝不进训练】。category=probe_person_screen，配合 --output-root data 落到 data/probe_person_screen/（在 data/raw 之外，prepare_dataset 不会扫到）。下载后与训练池做 ID+感知防泄漏核对。",
-  "_distinct_from_train_pos": "训练正例(pos_screen)刻意无人；本探针刻意有人+有屏，两者目的不同：训练教『屏幕=记』，探针测『有人也别漏记屏幕』。",
-  "_scope_note": "所有 query 必须落在收窄后的首发正类边界内：投影/电脑屏文字/课件PPT/白板/文档页/代码屏 + 画面里有人。不要引入手机App/电视流媒体/商品标签（出界子类）。",
-  "_expansion_2026-06-25": "为收窄召回 CI（原 51 张 → 目标 100+）：把原 6 个 query 加深到 30，并新增 8 个同口径(有人+有屏)的多样化 query。全局 ID 去重(--output-root data)会跳过与 train/raw 及另一探针撞 ID 的候选，故净增数 < 请求数属正常。",
-  "_usage": "python3 scripts/download_images.py --config scripts/keywords_task2_probe_personscreen.json --output-root data  (→ data/probe_person_screen/<slug>/；--output-root data 让去重基线覆盖 data/raw + 两个探针目录)",
+  "_comment": "Task 2 held-out probe: positive scenes with people and a readable screen, whiteboard, slide or code screen (ground truth = record = 1). Used as the over-correction check, confirming the fixed model has not learned to ignore anything containing a person and still recalls a screen with text when someone is present.",
+  "_holdout_guard": "This is a held-out evaluation set and never enters training. category=probe_person_screen, and with --output-root data it lands in data/probe_person_screen/, outside data/raw, so prepare_dataset does not scan it. After downloading, run the ID and perceptual leakage check against the training pool.",
+  "_distinct_from_train_pos": "The training positives (pos_screen) are deliberately unpeopled; this probe is deliberately people plus screen. Their purposes differ: training teaches 'a screen means record', the probe tests 'do not miss a screen just because a person is present'.",
+  "_scope_note": "Every query must fall inside the narrowed launch positive boundary: projector, computer screen text, slides, whiteboard, document page, code screen, with people in frame. Do not introduce phone apps, TV streaming or product labels, which are out of scope.",
+  "_expansion_2026-06-25": "To narrow the recall confidence interval, from 51 images toward 100 or more: the original 6 queries were deepened to 30 and 8 further diverse people-plus-screen queries were added. Global ID dedup with --output-root data skips anything colliding with train/raw or the other probe.",
+  "_usage": "python3 scripts/download_images.py --config scripts/keywords_task2_probe_personscreen.json --output-root data  (writes data/probe_person_screen/<slug>/; --output-root data makes the dedup baseline cover data/raw plus both probe directories)",
   "probe_person_screen": [
     {"query": "presenter pointing at projector screen", "count": 30},
     {"query": "teacher writing whiteboard classroom", "count": 30},

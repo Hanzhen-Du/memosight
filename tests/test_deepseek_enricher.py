@@ -1,7 +1,9 @@
-"""DeepSeekEnricher 测试。
+"""Tests for DeepSeekEnricher.
 
-- 解析 + 错误映射：fake OpenAI client，**不真调 API**（省 token、可离线、可 CI）。
-- 集成测试：一条真 DeepSeek 调用，需 DEEPSEEK_API_KEY + MEMOSIGHT_LIVE_ENRICH=1，否则 skip。
+- Parsing and error mapping use a fake OpenAI client and make no real API call, so they cost
+  nothing, run offline and work in CI.
+- One integration test makes a real DeepSeek call. It needs DEEPSEEK_API_KEY plus
+  MEMOSIGHT_LIVE_ENRICH=1, and skips otherwise.
 """
 
 import os
@@ -51,7 +53,7 @@ class _FakeChat:
 
 
 class _FakeClient:
-    """伪装 openai.OpenAI：只暴露 client.chat.completions.create。"""
+    """Stands in for openai.OpenAI, exposing only client.chat.completions.create."""
 
     def __init__(self, resp=None, exc=None):
         self.chat = _FakeChat(resp=resp, exc=exc)
@@ -70,7 +72,7 @@ class TestDeepSeekWithFakeClient(unittest.TestCase):
         self.assertFalse(any(t.startswith("mock:") for t in tags))
 
     def test_parses_json_object_wrapped_array(self):
-        # json_object 模式常返回 {"tags":[...]} —— 解析层已容忍
+        # json_object mode often returns {"tags":[...]}, which the parser already tolerates
         client = _FakeClient(resp=_Resp('{"tags": ["invoice","billing"]}'))
         tags = DeepSeekEnricher(client=client).enrich("INVOICE ...", {})
         self.assertEqual(tags, ["invoice", "billing"])
@@ -88,11 +90,11 @@ class TestDeepSeekWithFakeClient(unittest.TestCase):
         self.assertEqual(call["model"], "deepseek-v4-flash")
         self.assertEqual(call["max_tokens"], 300)
         self.assertEqual(call["response_format"], {"type": "json_object"})
-        # 首条消息是 system prompt
+        # The first message is the system prompt
         self.assertEqual(call["messages"][0]["role"], "system")
 
     def test_no_content_returns_empty(self):
-        client = _FakeClient(resp=_Resp(None))  # 内容为 None（如被过滤）
+        client = _FakeClient(resp=_Resp(None))  # content is None, for instance because it was filtered
         self.assertEqual(DeepSeekEnricher(client=client).enrich("t", {}), [])
 
     def test_no_choices_returns_empty(self):
@@ -139,7 +141,7 @@ class TestDeepSeekWithFakeClient(unittest.TestCase):
 
 @unittest.skipUnless(
     os.environ.get("MEMOSIGHT_LIVE_ENRICH") == "1" and os.environ.get("DEEPSEEK_API_KEY"),
-    "需 MEMOSIGHT_LIVE_ENRICH=1 且有 DEEPSEEK_API_KEY 才跑真调用（省 token）",
+    "a real call needs MEMOSIGHT_LIVE_ENRICH=1 and DEEPSEEK_API_KEY; skipped to avoid cost",
 )
 class TestDeepSeekLive(unittest.TestCase):
     def test_real_call_returns_tags(self):

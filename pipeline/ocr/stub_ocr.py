@@ -1,11 +1,11 @@
-"""StubOCR：测试/离线开发用的假 OCR。
+"""StubOCR: a fake OCR for tests and offline development.
 
-不依赖任何系统二进制。行为可控：
-- 传入 fixed_text → 恒定返回该文本；
-- 传入 mapping{路径关键字: 文本} → 按图片路径匹配返回；
-- 默认从图片文件名推断一句占位文本。
+It depends on no system binary and its behaviour is controllable:
+- pass fixed_text to always return that text;
+- pass a mapping of {path fragment: text} to return text based on the image path;
+- by default, derive a placeholder sentence from the image filename.
 
-它让整个闭环（M3/M4/M5）在 tesseract 二进制落地前就能端到端跑通。
+This lets the whole loop (M3 to M5) run end to end before the tesseract binary is available.
 """
 
 from __future__ import annotations

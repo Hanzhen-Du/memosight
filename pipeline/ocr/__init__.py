@@ -1,7 +1,8 @@
-"""OCR 接口层。
+"""The OCR interface layer.
 
-抽象基类 `OCRInterface`；本阶段实现真引擎 `TesseractOCR` 与测试用 `StubOCR`。
-未来可在同一接口后换手机/云端 OCR，管线其余部分无需改动。
+`OCRInterface` is the abstract base class. This phase implements the real engine
+`TesseractOCR` and `StubOCR` for tests. On-phone or cloud OCR can be swapped in behind the same
+interface later without touching the rest of the pipeline.
 """
 
 from .base import OCRInterface, OCRResult

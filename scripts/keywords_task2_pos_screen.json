@@ -1,9 +1,9 @@
 {
-  "_comment": "Task2 训练正例补充：【只有屏幕/白板/文档文字、没有人】的有用文字屏。强化『屏幕文字→记』信号，使其与『画面里有人』解耦（导师指定的对比组合的正例侧）。",
-  "_label": "category=positive → prepare_dataset 映射为 label 1（记）。新 slug 作为 positive 下新子类。",
-  "_scope": "严格落在 MVP 首发正类定义：投影/电脑屏文字/课件PPT/白板/文档页/代码屏。刻意【无人】，与 neg_people 形成对比对，打断『有人⇒记』伪相关。",
-  "_distinct": "概念与现有 positive 子类不同（不是同义改写），避免再命中同一批 Pexels 图；全局 ID 去重再兜底。",
-  "_manual_qc": "下载后剔除任何【明显有人入镜】的图（演讲者/听众）——这些留给 held-out 的 person+screen 探针，不进『无人正例』。",
+  "_comment": "Task 2 additional training positives: useful text screens with only a screen, whiteboard or document and no people. Strengthens the 'screen text means record' signal and decouples it from 'there is a person in frame'. This is the positive side of the comparison the advisor specified.",
+  "_label": "category=positive, which prepare_dataset maps to label 1 (record). Each new slug becomes a subclass under positive.",
+  "_scope": "Strictly inside the MVP launch positive definition: projector, computer screen text, slides, whiteboard, document page, code screen. Deliberately unpeopled, forming a contrast pair with neg_people that breaks the spurious 'people implies record' correlation.",
+  "_distinct": "The concepts differ from the existing positive subclasses rather than being synonyms, so they do not return the same batch of Pexels images. Global ID dedup catches anything that slips through.",
+  "_manual_qc": "After downloading, remove any image with people clearly in frame, such as a speaker or an audience. Those belong to the held-out person-plus-screen probe, not to the unpeopled positives.",
   "_usage": "python3 scripts/download_images.py --config scripts/keywords_task2_pos_screen.json --output-root data/raw",
   "positive": [
     {"query": "source code on monitor closeup", "count": 28},

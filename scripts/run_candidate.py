@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
-"""Task1 单候选全程流水线（5-seed）—— 训练→评估@thr→int8导出+白名单+ΔF1→双探针FP/召回。
+"""Full 5-seed pipeline for one task 1 candidate: train, evaluate at a threshold, export int8
+with whitelist and dF1 checks, then score both probes for FP and recall.
 
-对一个复杂度候选（channels + convs_per_stage）跑完整 5-seed 评估，全部在 ESP32 部署口径下：
-  每个 seed：
-    1. do_split 重切分去重池（与 run_variance 同口径）→ 训练（冻结 BEST 超参）。
-    2. val/test 在阈值 thr 下算 F1/FN/FP（keras）。
-    3. int8 导出（in-memory，固定 batch=1）→ 逐算子查 TFLM 白名单 + 全 int8 dtype 核对。
-    4. int8 在 test 上算 F1 → 量化掉点 ΔF1 = F1(int8) − F1(keras)，同阈值。
-    5. 两个 held-out 探针（int8）：noscreen FP@thr、person+screen 召回@thr。
-       探针防泄漏：按 Pexels-ID 核对（感知近重复已在 task2 收尾时全量核验=0，数据未变）。
-  跨 seed 聚合 mean±std，写 docs/results/task1_results/<tag>.json。seed42 模型存为该候选 deploy 产物。
+Runs a complete 5-seed evaluation for one complexity candidate (channels plus
+convs_per_stage), entirely under ESP32 deployment conditions.
 
-架构常量（参数/激活/权重/算子集）无 seed 方差，单独记录。
+  For each seed:
+    1. do_split re-splits the deduplicated pool, the same way run_variance does, then trains
+       with the frozen best hyperparameters.
+    2. Compute F1, FN and FP on val and test at threshold thr, in keras.
+    3. Export int8 in memory with batch pinned to 1, then check every operator against the
+       TFLite Micro whitelist and confirm all dtypes are int8.
+    4. Compute F1 on test with the int8 model, giving the quantisation loss
+       dF1 = F1(int8) - F1(keras) at the same threshold.
+    5. Score both held-out probes with the int8 model: noscreen FP at thr, and
+       person-plus-screen recall at thr.
+       Probe leakage control is by Pexels ID. Perceptual near-duplicates were verified as zero
+       across the whole set at the end of task 2 and the data has not changed since.
 
-依赖：复用 model/train/dedup_resplit/evaluate/export_tflite/probe_fp_test，无新增。
-示例：
+  Aggregate mean and standard deviation across seeds and write
+  docs/results/task1_results/<tag>.json. The seed 42 model is kept as this candidate's
+  deployment artifact.
+
+Architecture constants (parameters, activations, weights, operator set) have no seed variance
+and are recorded separately.
+
+Dependencies: reuses model, train, dedup_resplit, evaluate, export_tflite and probe_fp_test.
+Nothing new.
+
+Example:
   .venv/bin/python scripts/run_candidate.py --tag A_wide_late --channels 8,16,64,128 --convs 1
 """
 from __future__ import annotations
@@ -43,16 +57,21 @@ BEST = dict(bn_momentum=0.9, patience=15, start_from_epoch=20, epochs=80,
             lr=1e-3, batch_size=32, size=96)
 NOSCREEN = Path("data/probe_person_noscreen")
 SCREEN = Path("data/probe_person_screen")
-INDOOR = Path("data/probe_indoor_env_v2")  # task2b held-out 室内环境泛化探针（负例→测 FP）
+INDOOR = Path("data/probe_indoor_env_v2")  # task2b held-out indoor-environment generalisation
+                                           # probe; negatives, so it measures FP
 
 
 def load_clean_probe_grays(probe_dir: Path, manifest_ids: set[str]) -> tuple[list[np.ndarray], int, int]:
-    """读探针为灰度，按 Pexels-ID 剔除与训练池撞图者（感知近重复已在 task2 全量核验=0）。
+    """Load the probes as greyscale, removing any image colliding with the training pool by
+    Pexels ID. Perceptual near-duplicates were verified as zero across the whole set in task 2.
 
-    探针为任意分辨率原图（noscreen 235 / screen 181，单张可达数 MB）。**在加载时即
-    resize 到 INPUT_SIZE×INPUT_SIZE（INTER_AREA）**——这与下游 int8_predict_one 的部署预处理
-    一字不差（96→96 二次 resize 为恒等），数值完全等价；目的是避免把数百张全分辨率灰度图同时
-    驻留内存（曾导致 ~9.5GB 占用 → OOM 杀进程）。resize 后整批仅约数 MB。"""
+    Probe images are originals at arbitrary resolution (noscreen 235, screen 181, and a single
+    image can be several MB). They are resized to INPUT_SIZE x INPUT_SIZE with INTER_AREA at
+    load time. That is identical to the deployment preprocessing in int8_predict_one below, a
+    second 96-to-96 resize being the identity, so the numbers are exactly equivalent. The point
+    is to avoid holding hundreds of full-resolution greyscale images in memory at once, which
+    once reached about 9.5 GB and was killed by the OOM killer. After the resize the whole
+    batch is only a few MB."""
     imgs = collect_images(probe_dir)
     grays, leaked = [], 0
     for p in imgs:
@@ -67,7 +86,8 @@ def load_clean_probe_grays(probe_dir: Path, manifest_ids: set[str]) -> tuple[lis
 
 
 def int8_probe_rate(int8_path: Path, grays: list[np.ndarray], thr: float) -> float:
-    """探针在 int8 模型下判「记」(score>=thr) 的比例：noscreen→FP率, screen→召回。"""
+    """Fraction of probe images the int8 model judges as record (score >= thr). On noscreen
+    that is the FP rate; on screen it is recall."""
     from probe_fp_test import load_int8, int8_scores
     interp = load_int8(int8_path)
     scores = int8_scores(interp, grays)
@@ -106,7 +126,7 @@ def run_seed(seed, tag, channels, convs, thr, manifest, data_root, out_dir,
     val_m = metrics_from_probs(val_probs, val_labels, thr)
     test_m = metrics_from_probs(test_probs, test_labels, thr)
 
-    # int8 导出（in-memory）+ 验证
+    # int8 export in memory, plus verification
     int8_path = tmp_dir / f"{tag}_s{seed}_int8.tflite"
     rng = np.random.default_rng(42)
     rep = list(train_paths)
@@ -117,19 +137,21 @@ def run_seed(seed, tag, channels, convs, thr, manifest, data_root, out_dir,
     dt = verify_dtypes(int8_path)
     n_float = len(dt["float32_tensors"])
 
-    # 量化掉点 ΔF1（同阈值，test）
+    # Quantisation loss dF1, same threshold, on test
     p_int8 = predict_int8(int8_path, test_paths)
     int8_f1 = int8_metrics(p_int8, test_labels, thr)["f1"]
     quant_df1 = round(int8_f1 - test_m["f1"], 4)
 
-    # 探针（int8）
+    # Probes, int8
     noscreen_fp = int8_probe_rate(int8_path, probe_cache["noscreen"], thr)
     screen_recall = int8_probe_rate(int8_path, probe_cache["screen"], thr)
-    # task2b held-out 室内环境探针（负例→FP）；目录缺/空则记 None（task1 复用时不破坏）
+    # task2b held-out indoor-environment probe (negatives, so FP). If the directory is missing
+    # or empty, record None, so reusing this for task1 does not break
     indoor_env_fp = (int8_probe_rate(int8_path, probe_cache["indoor"], thr)
                      if probe_cache.get("indoor") else None)
 
-    # seed42 留作 deploy 产物；其余 int8 临时文件保留在 tmp（gitignored）
+    # seed 42 is kept as the deployment artifact; the other int8 temporaries stay in tmp,
+    # which is gitignored
     if seed == 42:
         keras_path = Path("models/task1_candidates") / f"gatekeeper_task1_{tag}.keras"
         keras_path.parent.mkdir(parents=True, exist_ok=True)
@@ -159,15 +181,15 @@ def agg(rows, key):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Task1 单候选 5-seed 全程流水线。")
+    ap = argparse.ArgumentParser(description="Full 5-seed pipeline for one task 1 candidate.")
     ap.add_argument("--tag", required=True)
-    ap.add_argument("--channels", required=True, help="逗号分隔，如 8,16,64,128")
-    ap.add_argument("--convs", default="1", help="int 或逗号分隔与 channels 等长，如 1,1,2,2")
+    ap.add_argument("--channels", required=True, help="comma separated, for example 8,16,64,128")
+    ap.add_argument("--convs", default="1", help="an int, or a comma-separated list the same length as channels, for example 1,1,2,2")
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 1, 7, 123, 2024])
     ap.add_argument("--threshold", type=float, default=0.40)
     ap.add_argument("--manifest", type=Path, default=Path("data/processed/manifest_dedup.csv"))
     ap.add_argument("--leak-manifest", type=Path, default=Path("data/processed/manifest.csv"),
-                    help="探针防泄漏核对用的全集 ID 来源（superset，更保守）")
+                    help="source of the full id set used for the probe leakage check; a superset is more conservative")
     ap.add_argument("--data-root", type=Path, default=Path("data/processed"))
     ap.add_argument("--out-dir", type=Path, default=Path("data/processed"))
     ap.add_argument("--tmp-dir", type=Path,
@@ -181,17 +203,18 @@ def main() -> int:
     convs = convs_list[0] if len(convs_list) == 1 else tuple(convs_list)
     args.tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    # 架构常量（无 seed 方差）
+    # Architecture constants, which have no seed variance
     cm = build_model(BEST["size"], bn_momentum=BEST["bn_momentum"],
                      channels=channels, convs_per_stage=convs)
     params = cm.count_params()
 
-    # 探针清洗（一次，跨 seed 复用：ID 防泄漏；感知近重复已在 task2 收尾全量核验=0）
+    # Clean the probes once and reuse across seeds. Leakage control by id; perceptual
+    # near-duplicates were verified as zero across the whole set at the end of task 2
     mids = manifest_id_set(args.leak_manifest)
     ns_grays, ns_tot, ns_leak = load_clean_probe_grays(NOSCREEN, mids)
     sc_grays, sc_tot, sc_leak = load_clean_probe_grays(SCREEN, mids)
     in_grays, in_tot, in_leak = load_clean_probe_grays(INDOOR, mids)
-    print(f"[{args.tag}] 探针：noscreen {len(ns_grays)}/{ns_tot}(leak {ns_leak}) | "
+    print(f"[{args.tag}] probes: noscreen {len(ns_grays)}/{ns_tot} (leaked {ns_leak}) | "
           f"screen {len(sc_grays)}/{sc_tot}(leak {sc_leak}) | "
           f"indoor_env_v2 {len(in_grays)}/{in_tot}(leak {in_leak})", flush=True)
     probe_cache = {"noscreen": ns_grays, "screen": sc_grays, "indoor": in_grays}
@@ -202,7 +225,8 @@ def main() -> int:
 
     summary_keys = ["val_f1", "test_f1", "test_fn", "test_fp", "test_recall",
                     "test_acc", "quant_df1", "noscreen_fp", "screen_recall"]
-    if in_grays:  # indoor_env_v2 探针存在时才聚合（否则各 seed 记 None，不可平均）
+    if in_grays:  # only aggregate when the indoor_env_v2 probe exists; otherwise each seed
+                  # records None and there is nothing to average
         summary_keys.append("indoor_env_fp")
     summary = {k: agg(rows, k) for k in summary_keys}
     out = {

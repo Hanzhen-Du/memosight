@@ -1,8 +1,9 @@
-"""M2: OCR 接口 + Tesseract 真引擎 + StubOCR 测试。
+"""M2: tests for the OCR interface, the real Tesseract engine and StubOCR.
 
-- StubOCR 测试始终跑（无系统依赖）。
-- TesseractOCR 测试仅在系统装了 tesseract 二进制时跑（否则 skip），
-  合成一张写有英文文字的图，断言识别文本包含关键词。
+- The StubOCR tests always run; they have no system dependency.
+- The TesseractOCR tests run only when the tesseract binary is installed, and skip otherwise.
+  They synthesise an image containing English text and assert the recognised text contains the
+  expected keywords.
 """
 
 import tempfile
@@ -19,7 +20,7 @@ from pipeline.ocr.base import (
 
 
 def make_text_image(text: str, size=(240, 900)) -> np.ndarray:
-    """白底黑字合成图（BGR）。size=(h, w)。"""
+    """Synthesise a BGR image with black text on white. size is (h, w)."""
     h, w = size
     img = np.full((h, w, 3), 255, dtype=np.uint8)
     cv2.putText(
@@ -33,13 +34,13 @@ class TestPreprocess(unittest.TestCase):
     def test_resizes_down_and_grayscales(self):
         img = make_text_image("HELLO", size=(2000, 4000))
         gray = preprocess(img, max_side=1600)
-        self.assertEqual(gray.ndim, 2)              # 灰度
-        self.assertEqual(max(gray.shape), 1600)     # 最长边被缩到 1600
+        self.assertEqual(gray.ndim, 2)              # greyscale
+        self.assertEqual(max(gray.shape), 1600)     # the longest side was reduced to 1600
 
     def test_no_upscale(self):
         img = make_text_image("HI", size=(100, 200))
         gray = preprocess(img, max_side=1600)
-        self.assertEqual(gray.shape[:2], (100, 200))  # 小图不放大
+        self.assertEqual(gray.shape[:2], (100, 200))  # small images are not enlarged
 
     def test_missing_path_raises(self):
         with self.assertRaises(FileNotFoundError):
@@ -67,14 +68,14 @@ class TestEnhancedPreprocess(unittest.TestCase):
             self.assertLess(after, before, f"deskew failed for {deg} deg")
 
     def test_deskew_skips_large_angle(self):
-        # 大角度多为误估，跳过（返回原图，形状不变）
+        # Large angles are usually mis-estimates and are skipped, returning the image unchanged
         sk = self._skewed_text(30.0)
         self.assertEqual(_deskew(sk).shape, sk.shape)
 
     def test_upscales_small_image(self):
         small = make_text_image("HI", size=(80, 160))
         out = preprocess_enhanced(small, max_side=1600, min_side=1000)
-        self.assertGreaterEqual(max(out.shape), 1000)  # 小图被放大
+        self.assertGreaterEqual(max(out.shape), 1000)  # small images are upscaled
 
     def test_blank_image_does_not_crash(self):
         blank = np.full((200, 400), 255, np.uint8)
@@ -82,7 +83,7 @@ class TestEnhancedPreprocess(unittest.TestCase):
         self.assertEqual(out.ndim, 2)
 
 
-@unittest.skipUnless(tesseract_available(), "tesseract 二进制未安装")
+@unittest.skipUnless(tesseract_available(), "the tesseract binary is not installed")
 class TestTesseractEnhance(unittest.TestCase):
     def test_reads_slightly_rotated_text(self):
         img = np.full((300, 1000, 3), 255, np.uint8)
@@ -98,8 +99,8 @@ class TestStubOCR(unittest.TestCase):
         self.assertIsInstance(StubOCR(), OCRInterface)
 
     def test_fixed_text(self):
-        ocr = StubOCR(fixed_text="白板 会议纪要")
-        self.assertEqual(ocr.ocr("anything.png"), "白板 会议纪要")
+        ocr = StubOCR(fixed_text="whiteboard meeting notes")
+        self.assertEqual(ocr.ocr("anything.png"), "whiteboard meeting notes")
 
     def test_mapping(self):
         ocr = StubOCR(mapping={"meeting": "meeting notes", "menu": "lunch menu"})
@@ -117,14 +118,14 @@ class TestStubOCR(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    tesseract_available(), "tesseract 二进制未安装（apt），跳过真引擎测试"
+    tesseract_available(), "the tesseract binary is not installed via apt; skipping the real-engine tests"
 )
 class TestTesseractOCR(unittest.TestCase):
     def test_reads_english_text(self):
         ocr = TesseractOCR(lang="eng")
         img = make_text_image("MEMOSIGHT")
         text = ocr.ocr(img).upper()
-        # OCR 容错：至少认出核心词的主要字符
+        # OCR is imperfect, so require only that the main characters of the key words are read
         self.assertIn("MEMOSIGHT", text.replace(" ", ""))
 
     def test_reads_from_file_path(self):

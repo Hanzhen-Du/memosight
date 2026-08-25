@@ -1,251 +1,311 @@
-# 导师问题 1 — 新旧训练方式对比 & 为什么准确率提不上去
+# Why the gatekeeper's accuracy stopped improving
 
-> **Summary (EN).** The central diagnostic write-up. Two intuitive explanations for the
-> gatekeeper's F1 plateau are ruled out by experiment — *model capacity* (6 architectures ×
-> 5 seeds, 3.8× parameter sweep: F1 stays on a 0.736–0.769 plateau, the three largest models
-> are no better than baseline) and *training-set size* (+249 targeted negatives: primary
-> metric moves −0.017, inside noise, while recall regresses). Per-image analysis of 59 false
-> positives then localises the real bottleneck to **input representation and data
-> distribution**: false triggers cluster in bright built indoor rooms, and face count is
-> *negatively* correlated with false triggers (−0.093), so "too many people" is not the
-> cause. At 96×96 greyscale a blank screen and a text-bearing screen are close to
-> inseparable. Section 5 lists what has *not* been ruled out.
+Consolidated report, 2026-07-28.
 
-**整合报告**　2026-07-28
-数据源（全部为本机实测，非估计）：`docs/model-capacity-sweep.md`、`docs/targeted-negatives-retrain.md`、
-`docs/false-positive-diagnosis.md`、实验记录、`docs/threshold-tradeoff.md`、`docs/data-leakage-audit.md`、
-`docs/dataset-expansion.md`。原始 JSON 在 `docs/results/task1_results/`、`docs/results/task2b_results/`。
+Two intuitive explanations for the F1 plateau were tested and both turned out to be wrong.
+Ruling them out is what located the actual bottleneck, so this report is organised around the
+elimination rather than around the final number.
 
----
+Every figure here was measured on this machine. Sources: `docs/model-capacity-sweep.md`,
+`docs/targeted-negatives-retrain.md`, `docs/false-positive-diagnosis.md`,
+`docs/threshold-tradeoff.md`, `docs/data-leakage-audit.md`, `docs/dataset-expansion.md`, and
+the experiment log. Raw JSON is under `docs/results/task1_results/` and
+`docs/results/task2b_results/`.
 
-## 0. 一页纸回答（TL;DR）
+## 0. Summary
 
-1. **"新训练方式"改的不是模型，是实验制度。** 旧做法是「单次训练 + 单 seed + 未去重数据 + 事后挑指标」；
-   新做法是「5-seed 重复 + 按 Pexels-ID 去重并零泄漏核验 + 固定 held-out 探针 + 固定阈值 0.40 + int8 部署口径」。
-   换制度的直接后果：**旧口径下报的 FN 0.277 被证伪，真值 0.337**——旧的"好数字"有一部分是数据泄漏 + seed 运气。
-2. **"提不上去"不是没努力，是两个主流假设被逐一实验排除了。**
-   - 假设 A「模型容量不够」→ 参数量扫了 **3.8×（24.9k→94.5k）**，test F1 平台在 **0.736–0.769**，
-     最大的三个模型全部 ≤ baseline。**证伪。**
-   - 假设 B「负例数据量不够」→ 针对性补了 **+249 张**室内负例重训，主目标 noscreen FP **0.331→0.314（噪声内）**，
-     还换来召回退化（FN 0.187→0.262）。**证伪，且是负收益。**
-3. **真瓶颈定位在数据分布 / 表征分辨率，不在容量也不在样本量。** 两个具体机制（都有实测支撑）：
-   - **协变量偏移**：误触发集中在"室内建成环境"（办公室 0.559 / 客厅 0.52 / 会议室 0.324），
-     户外餐饮近乎为 0；且**人脸数与误触发反相关（−0.093）**——不是"见人就触发"，是被房间骗。
-   - **表征极限**：96×96 灰度下，"亮室内 + 矩形屏状区域"这个特征在正类（有文字的屏）和负类
-     （同一间办公室里关掉的屏/白墙/窗）之间**高度共享**，模型没有足够分辨率去区分"空白屏 vs 文字屏"。
-4. **给导师的一句话**：现在的 F1≈0.77 不是"调参没调好"，而是**在 96×96 灰度 + 现有数据分布下的天花板**。
-   要继续往上走，必须改的是**输入表征 / 任务分解**（见 §6），不是继续加参数或加图。
+The change in "training method" was not a change to the model. It was a change to the
+experimental protocol. The old way was one training run, one seed, un-deduplicated data, and
+metrics picked after the fact. The new way is five seeds, deduplication by Pexels ID with a
+zero-leakage check, fixed held-out probes, a threshold fixed at 0.40, and int8 deployment
+measurement. The immediate consequence: the FN of 0.277 reported under the old protocol does
+not survive, and the true value is 0.337. Part of the old "good number" was data leakage and
+part was seed luck.
 
----
+Accuracy did not stop improving for lack of effort. Two hypotheses were eliminated one at a
+time.
 
-## 1. "旧"和"新"到底指什么（先把口径说清）
+- Capacity. Parameters swept 3.8x, from 24.9k to 94.5k. Test F1 sat on a 0.736–0.769 plateau
+  and the three largest models were all at or below baseline. Falsified.
+- Training-set size. 249 targeted indoor negatives added and retrained. The primary metric,
+  no-screen probe FP, moved 0.331 to 0.314, inside noise, and recall regressed with it
+  (FN 0.187 to 0.262). Falsified, and net negative.
 
-"旧/新"在本项目里有两层含义，容易混，先分开：
+The bottleneck is in the data distribution and the input representation, not in capacity and
+not in sample count. Two mechanisms, both with measurements behind them:
 
-| | **含义 A：方法学上的新旧**（制度） | **含义 B：本轮对照里的 baseline**（架构） |
+- Covariate shift. False triggers concentrate in built indoor environments: office 0.559,
+  living room 0.52, meeting room 0.324, with outdoor and restaurant scenes near zero. Face
+  count is negatively correlated with false triggers at −0.093, so the model is not firing at
+  people, it is being fooled by rooms.
+- Representation limit. At 96x96 greyscale, "bright indoor scene with a rectangular
+  screen-like region" is a feature shared almost equally by the positive class (a screen with
+  text) and the negative class (the switched-off screen, white wall or window in the same
+  office). There is not enough resolution to separate a blank screen from a text-bearing one.
+
+In one line: F1 around 0.77 is not a tuning failure, it is the ceiling at 96x96 greyscale on
+the current data distribution. Moving past it means changing the input representation or
+decomposing the task (section 6), not adding parameters or images.
+
+## 1. What "old" and "new" refer to
+
+The words carry two separate meanings in this project and they are easy to conflate.
+
+| | Meaning A: methodology | Meaning B: the baseline in this comparison |
 |---|---|---|
-| 旧 | 阶段 1 之前：单次训练、单 seed、原始未去重 split、阈值取 argmax(0.5)、无固定探针 | `baseline` = 旧的小架构（8,16,32,64；24.9k 参数） |
-| 新 | 阶段 1 之后：5-seed、去重 + 零泄漏核验、固定 held-out 探针、固定阈值 0.40、int8 部署口径 | 5 个更大候选 A/B/C/D/E（74k–94.5k 参数） |
+| Old | Before phase 1: single run, single seed, original un-deduplicated splits, argmax threshold at 0.5, no fixed probe | `baseline` = the old small architecture (8,16,32,64; 24.9k parameters) |
+| New | After phase 1: 5 seeds, dedup with zero-leakage verification, fixed held-out probes, threshold fixed at 0.40, int8 deployment measurement | Five larger candidates A/B/C/D/E (74k–94.5k parameters) |
 
-> ⚠️ **关键澄清**：task1 报告里的 `baseline` **不是旧模型的旧数字**，而是**旧架构在新制度下重跑的结果**。
-> 所以 §3 的对比表是"同一套严格口径下比架构"，**不掺方法学差异**——这正是能下结论的前提。
+One clarification matters for reading section 3: `baseline` in the task1 report is not the old
+model's old numbers. It is the old architecture re-run under the new protocol. The comparison
+table therefore compares architectures under one strict protocol with no methodology
+difference mixed in, which is what makes a conclusion possible at all.
 
-### 1.1 旧方法的三个具体问题（已实测确认，不是事后归咎）
+### 1.1 Three concrete problems with the old method
 
-| 问题 | 证据 | 后果 |
+These were confirmed by measurement, not assigned in hindsight.
+
+| Problem | Evidence | Consequence |
 |---|---|---|
-| **数据泄漏** | 感知哈希 + 像素确认查出 **132 对**近重复、**88 个重复组**；其中 **49 组跨 split，48 组是纯正例**。根因：`download_images.py` 用多关键词抓图，**同一张 Pexels 图被重复下载**进不同子类目录（83/88 组共享同一 Pexels ID） | 虚高正类 recall、压低表观 FN |
-| **单 seed 运气** | 5-seed 重跑：recall 在 **0.66–0.85** 之间漂（std 0.068） | 单次结果不可复现 |
-| **没有 held-out 真实探针** | 只有 test split，没有独立的"有人无屏"/"人+文字屏"照片探针 | 看不见协变量偏移型错误 |
+| Data leakage | Perceptual hashing plus pixel confirmation found 132 near-duplicate pairs across 88 groups. 49 groups spanned splits and 48 of those were purely positive-class. Root cause: `download_images.py` fetched images under multiple keywords, so the same Pexels photo was downloaded repeatedly into different subclass folders (83 of 88 groups share a Pexels ID) | Inflated positive-class recall, suppressed apparent FN |
+| Single-seed luck | Re-run across 5 seeds, recall drifts between 0.66 and 0.85 (std 0.068) | A single run is not reproducible |
+| No held-out real-photo probe | Only a test split, no independent "people without screen" or "people plus text screen" photo set | Covariate-shift errors are invisible |
 
-**代价核算**：去重后同 seed=42 的 FN **0.277 → 0.337**；FP 率 0.130 → ~0.197；
-5-seed 真实 F1 = **0.756 ± 0.024**（阈值 0.5、keras 口径）。
-即"FN/FP 都 < 0.30"这个旧结论**是泄漏 + 运气共同造出的假象**，已作废。
+The cost, tallied: after dedup, FN at seed 42 goes from 0.277 to 0.337 and FP rate from 0.130
+to roughly 0.197. True 5-seed F1 is 0.756 ± 0.024 at threshold 0.5 under keras measurement.
+The old conclusion that FN and FP were both below 0.30 was an artefact of leakage and luck
+together, and has been withdrawn.
 
-### 1.2 新方法的固定口径（此后所有实验都遵守）
+### 1.2 The fixed protocol every experiment since has followed
 
-- **5 seed**：`[42, 1, 7, 123, 2024]`，报 mean ± std，**不挑 seed**。
-- **阈值固定 0.40**（不按结果反调；阈值本身的权衡另见 `docs/threshold-tradeoff.md`）。
-- **防泄漏**：`dedup_resplit.py` 按连通分量去重 → `check_leakage.py` 跨/内 split 必须 **0/0**；
-  `guard_probe_overlap.py` 核验训练池 × 探针 **0 重叠**。
-- **固定 held-out 探针**（真实照片，**永不进训练**，前后可比）：
-  `noscreen` 235 张（GT=不记）、`person_screen` 181 张（GT=记）、`indoor_env_v2` 64 张（task2b 新增）。
-- **int8 部署口径**：所有探针指标都在导出后的 int8 tflite + 部署预处理（cv2 灰度 → resize96 INTER_AREA → 量化）上测，
-  不是训练时的 float 数字。量化掉点全候选 **|ΔF1| ≤ 0.005**。
-- **预算门**：每个候选训练前静态核算 ESP32 预算（并发激活 <256KB、int8 权重 <100KB、仅 TFLM 白名单算子）。
+- Five seeds, `[42, 1, 7, 123, 2024]`, reported as mean ± std, with no seed selection.
+- Threshold fixed at 0.40, never adjusted to fit a result. The threshold trade-off itself is
+  a separate question, in `docs/threshold-tradeoff.md`.
+- Leakage control: `dedup_resplit.py` deduplicates by connected component, then
+  `check_leakage.py` must report 0 cross-split and 0 within-split duplicates, and
+  `guard_probe_overlap.py` must report 0 overlap between the training pool and the probes.
+- Fixed held-out probes of real photographs, never used in training, so before/after
+  comparisons stay valid: `noscreen` 235 images (ground truth: do not record),
+  `person_screen` 181 images (ground truth: record), `indoor_env_v2` 64 images (added in
+  task2b).
+- int8 deployment measurement: every probe metric is taken on the exported int8 tflite with
+  deployment preprocessing (cv2 greyscale, resize to 96 with INTER_AREA, quantise), not on
+  training-time float numbers. Quantisation cost across all candidates is within 0.005 F1.
+- Budget gate: before a candidate is trained, its ESP32 budget is checked statically —
+  concurrent activations under 256 KB, int8 weights under 100 KB, operators restricted to the
+  TFLite Micro whitelist.
 
----
+## 2. How the three experiments were run
 
-## 2. 三个实验分别怎么做的
-
-| | **实验 1：容量扫描**（task1） | **实验 2：补人像负例**（task2） | **实验 3：针对性补室内负例**（task2b） |
+| | Experiment 1: capacity sweep (task1) | Experiment 2: add people negatives (task2) | Experiment 3: targeted indoor negatives (task2b) |
 |---|---|---|---|
-| 假设 | 模型容量不够 | 人像负例覆盖不足（协变量偏移） | 室内**环境**负例覆盖不足 |
-| 动作 | 固定数据，扫 6 个架构（baseline + A/B/C/D/E），24.9k→94.5k 参数 | 加 +558 负例（街头/市场/通勤/家居等**非办公**人像）、+130 正例 | 在 task2 基础上再加 **+249** 张"空室内环境/空白屏"负例 |
-| 变量 | **只变架构** | 只变数据 | 只变数据 |
-| 规模 | 6 候选 × 5 seed = 30 次训练 | 5-seed + 单 seed 部署模型 | 5-seed（结构固定为 C_wide_uniform） |
-| 结果 | 平台化，仅 C 略优（+0.021 ≈ 1σ） | ✅ 人像 FP 51%→24%（帕累托占优） | ❌ 主目标未达成 + 召回退化 |
+| Hypothesis | Not enough capacity | Not enough people-negative coverage (covariate shift) | Not enough indoor *environment* negative coverage |
+| Action | Fix the data, sweep 6 architectures (baseline + A/B/C/D/E), 24.9k to 94.5k parameters | Add 558 negatives (street, market, commute, home — deliberately non-office people) and 130 positives | On top of task2, add 249 more "empty indoor environment / blank screen" negatives |
+| Variable | Architecture only | Data only | Data only |
+| Scale | 6 candidates x 5 seeds = 30 training runs | 5 seeds plus a single-seed deployment model | 5 seeds, architecture fixed at C_wide_uniform |
+| Outcome | Plateau; only C is marginally better (+0.021, about 1σ) | Worked. People-driven FP 51% to 24%, Pareto-dominant | Primary objective missed, and recall regressed |
 
-> 实验 2 是**唯一成功**的一次，它证明了"数据方向"在**某些**分布上有效（旧 v4 → task2，
-> 同召回下人像误报砍掉一半多）。实验 3 是沿同一方向再走一步——**这一步没走通**，见 §3.2。
+Experiment 2 is the only one that worked, and it does show that the data direction is
+effective on *some* distributions: from the old v4 to task2, people-driven false triggers were
+more than halved at matched recall. Experiment 3 took one more step in that same direction and
+did not get there. Section 3.2 explains why.
 
----
+## 3. The elimination chain
 
-## 3. 诊断链：三步排除
+### 3.1 Capacity is not the bottleneck
 
-### ① 容量不是瓶颈（实验 1，3.8× 参数扫描）
+Experiment 1, 3.8x parameter sweep.
 
-| 候选 | 参数 | test F1（5-seed）| ΔF1 vs baseline | noscreen FP ↓ | screen recall ↑ |
+| Candidate | Parameters | test F1 (5-seed) | ΔF1 vs baseline | noscreen FP (lower is better) | screen recall (higher is better) |
 |---|---:|---|---:|---|---|
-| **baseline** | 24.9k | 0.7487 ± 0.0210 | — | 0.361 ± 0.053 | 0.625 ± 0.058 |
+| baseline | 24.9k | 0.7487 ± 0.0210 | — | 0.361 ± 0.053 | 0.625 ± 0.058 |
 | A_wide_late | 85.3k | 0.7421 ± 0.0232 | −0.0066 | 0.391 ± 0.097 | 0.645 ± 0.095 |
 | B_deep_stack | 74.3k | 0.7392 ± 0.0358 | −0.0095 | 0.346 ± 0.081 | 0.600 ± 0.083 |
-| **C_wide_uniform** | 60.9k | **0.7694 ± 0.0148** | **+0.0207** | **0.331 ± 0.091** | 0.582 ± 0.095 |
+| C_wide_uniform | 60.9k | 0.7694 ± 0.0148 | +0.0207 | 0.331 ± 0.091 | 0.582 ± 0.095 |
 | D_five_stage | 80.6k | 0.7359 ± 0.0199 | −0.0128 | 0.375 ± 0.120 | 0.600 ± 0.124 |
 | E_combo | 94.5k | 0.7357 ± 0.0208 | −0.0130 | 0.392 ± 0.108 | 0.635 ± 0.099 |
 
-**三条读法：**
-1. **平台化**：test F1 全落在 **0.736–0.769**。若瓶颈是容量，单调放大应单调收益——实际是平台 + 噪声。
-   **最大的三个模型（A 85k / D 81k / E 95k）全部 ≤ baseline。**
-2. **差异 ≈ seed 方差**：多数 ΔF1（−0.013 ~ +0.021）落在单 seed std（0.015–0.036）量级内，统计上难与噪声区分。
-   唯一正信号 C 也只有 **~1σ**——**我们不把它当作"复杂度解决了问题"的证据，只当作"预算内当前最优配置"。**
-3. **加容量治不了误触发**：`noscreen FP` 在**所有容量下都卡在 0.33–0.39**，没有随参数量下降的趋势。
+Three things to read out of that table.
 
-> 附带结论（对硬件路线有用）：6 个候选**全部**预算全绿——全 int8（0 个 float32 张量）、
-> 算子全在 TFLM 白名单（仅 5 个算子）、int8 权重 ≤ 92.3KB < 100KB、并发激活 ≤ 180KB < 256KB。
-> 即**准确率天花板不是被硬件预算逼出来的**——我们还有预算余量，但花不出去。
+Test F1 lands between 0.736 and 0.769 for every candidate. If capacity were the constraint,
+scaling monotonically should pay off monotonically; instead there is a plateau plus noise, and
+the three largest models (A at 85k, D at 81k, E at 95k) are all at or below baseline.
 
-### ② 补数据也没提上去（实验 3，+249 负例）
+Most of the differences are the size of seed variance. ΔF1 ranges from −0.013 to +0.021 while
+single-seed std runs 0.015 to 0.036, so the gaps are hard to separate from noise statistically.
+The one positive signal, C, is about 1σ. We do not treat that as evidence that complexity
+solved anything, only as the best configuration available inside the budget.
 
-| 指标 | task1（前） | task2b（后） | Δ | 可比性 | 判读 |
+Capacity does not fix false triggering. Probe FP is stuck at 0.33 to 0.39 at every capacity
+with no downward trend as parameters grow.
+
+There is a useful side result for the hardware track: all six candidates cleared the budget.
+Fully int8 with zero float32 tensors, operators entirely within the TFLite Micro whitelist
+(only 5 distinct operators), int8 weights at most 92.3 KB against a 100 KB limit, concurrent
+activations at most 180 KB against 256 KB. The accuracy ceiling is not being imposed by the
+hardware budget. There is headroom, and no way to spend it usefully.
+
+### 3.2 More data did not lift it either
+
+Experiment 3, 249 added negatives.
+
+| Metric | task1 (before) | task2b (after) | Δ | Comparable? | Reading |
 |---|---|---|---:|---|---|
-| **noscreen FP** ↓（主目标） | 0.331 ± 0.091 | 0.314 ± 0.093 | **−0.017** | 固定探针·可比 | ❌ 远在 ±0.09 噪声内，**未达成** |
-| **screen recall** ↑ | 0.582 ± 0.095 | 0.521 ± 0.118 | **−0.061** | 固定探针·可比 | ❌ 召回退化 |
-| indoor_env_v2 FP ↓ | 0.328¹ | 0.250¹ | **−0.078** | 固定探针·可比 | ✅ 唯一正向 |
-| test F1 | 0.769 ± 0.015 | 0.704 ± 0.034 | −0.066 | ⚠️ 重切分·不严格可比 | 退 |
-| test FN ↓ | 0.187 ± 0.060 | 0.262 ± 0.056 | **+0.074** | ⚠️ 同上 | 退·**更多漏报** |
-| test recall ↑ | 0.813 ± 0.060 | 0.738 ± 0.056 | −0.074 | ⚠️ 同上 | 退 |
+| noscreen FP, lower is better (primary) | 0.331 ± 0.091 | 0.314 ± 0.093 | −0.017 | Fixed probe, comparable | Well inside ±0.09 noise. Objective missed |
+| screen recall, higher is better | 0.582 ± 0.095 | 0.521 ± 0.118 | −0.061 | Fixed probe, comparable | Recall regressed |
+| indoor_env_v2 FP, lower is better | 0.328 [1] | 0.250 [1] | −0.078 | Fixed probe, comparable | The one improvement |
+| test F1 | 0.769 ± 0.015 | 0.704 ± 0.034 | −0.066 | Re-split, not strictly comparable | Worse |
+| test FN, lower is better | 0.187 ± 0.060 | 0.262 ± 0.056 | +0.074 | As above | Worse: more missed captures |
+| test recall, higher is better | 0.813 ± 0.060 | 0.738 ± 0.056 | −0.074 | As above | Worse |
 
-¹ seed42 对 seed42 的公平单模型对比（indoor_env_v2 探针是 task2b 才建的，task1 无 5-seed 基线）。
+[1] A fair single-model comparison, seed 42 against seed 42. The indoor_env_v2 probe was only
+built during task2b, so task1 has no 5-seed baseline on it.
 
-**关键洞察 —— 为什么一个探针降了、另一个没动：**
+Why one probe improved and the other did not move:
 
-- `indoor_env_v2`（**空**室内环境：大堂/图书馆/前台，无人）≈ 我补的负例（空房间/空白屏）
-  → **同分布，学到了**，FP 0.328→0.250。
-- `noscreen`（**有人** + 室内：办公室同事交谈 / 会议室 / 家庭客厅）→ 画面含**人**，与"空房间"负例**不同分布**
-  → FP 没动。
+- `indoor_env_v2` is *empty* indoor environments — lobbies, libraries, reception desks, no
+  people. That is the same distribution as the negatives we added (empty rooms, blank
+  screens), so the model learned it: FP 0.328 to 0.250.
+- `noscreen` is *people* in indoor scenes — colleagues talking in an office, meeting rooms,
+  family living rooms. Those frames contain people and are a different distribution from
+  "empty room" negatives, so FP did not move.
 
-> **修对了一半的分布，没对准真正出错的那一半。**
-> 而且 +249 负例把类别推得更偏负（1387→1636），决策边界向"不记"移动 → FN↑、召回↓，
-> 却**没换来** noscreen FP 下降。**净结果：不划算。结论是保留 task1 的 C_wide_uniform 为当前守门员。**
+We fixed half the distribution, and not the half that was failing. On top of that, the 249
+extra negatives skewed the class balance further negative (1387 to 1636), pushing the decision
+boundary toward "do not record", which raised FN and lowered recall without buying any
+reduction in noscreen FP. Net result: not worth it. The conclusion was to keep task1's
+C_wide_uniform as the current gatekeeper.
 
-### ③ 真瓶颈 = 数据分布 + 表征（误触发诊断，59 张 FP 逐张分析）
+### 3.3 The real bottleneck is distribution plus representation
 
-对 `noscreen` 探针 235 张逐张诊断（C_wide_uniform int8 @0.40，FP = 59/235 = 0.251）：
+All 59 false positives on the `noscreen` probe were examined individually
+(C_wide_uniform int8 at threshold 0.40, FP = 59/235 = 0.251).
 
-**(a) 误触发按场景清晰分三簇——被房间骗，不是被人骗：**
+**False triggers split cleanly by scene. The model is fooled by rooms, not by people.**
 
-| 场景 | n | FP 率 | 平均人脸数 |
+| Scene | n | FP rate | Mean face count |
 |---|---:|---:|---:|
-| office_colleagues_conversation | 34 | **0.559** | 0.41 |
-| family_home_living_room | 25 | **0.52** | 0.08 |
+| office_colleagues_conversation | 34 | 0.559 | 0.41 |
+| family_home_living_room | 25 | 0.52 | 0.08 |
 | people_meeting_room_talking | 34 | 0.324 | 0.29 |
 | coworkers_standing_meeting | 29 | 0.241 | 0.59 |
 | group_friends_indoor_candid | 29 | 0.207 | 0.90 |
 | people_street_candid | 25 | 0.08 | 0.20 |
 | friends_cafe_group | 29 | 0.034 | 0.52 |
-| people_restaurant_dining | 30 | **0.0** | 0.23 |
+| people_restaurant_dining | 30 | 0.0 | 0.23 |
 
-**高 FP 簇 = 办公室 / 会议室 / 客厅——正好是显示器、白板、投影、文档所在的房间。**
-户外街景与餐饮几乎为零。
+The high-FP cluster is offices, meeting rooms and living rooms, which are exactly the rooms
+that contain monitors, whiteboards, projectors and documents. Outdoor street scenes and dining
+are close to zero.
 
-**(b) FP 图 vs 正确拒识图的维度差异：**
+**How false positives differ from correct rejections.**
 
-| 维度 | FP（n=59） | 正确拒识（n=176） | 差异 |
+| Dimension | FP (n=59) | Correct rejection (n=176) | Difference |
 |---|---:|---:|---:|
-| 亮度 | 0.601 | 0.415 | **+0.186**（最大单维差异） |
-| 类屏矩形命中率 | 0.237 | 0.119 | **+0.118**（约 2×） |
-| 对比度 | 0.253 | 0.231 | +0.022 |
-| **人脸数代理** | 0.339 | 0.432 | **−0.093（反相关！）** |
+| Brightness | 0.601 | 0.415 | +0.186 (largest single-dimension gap) |
+| Screen-like rectangle hit rate | 0.237 | 0.119 | +0.118 (roughly 2x) |
+| Contrast | 0.253 | 0.231 | +0.022 |
+| Face-count proxy | 0.339 | 0.432 | −0.093 (negatively correlated) |
 
-**(c) 人脸数反相关，直接证伪"人多→误触发"的直觉假设**——多张高分 FP 检到 **0 张**正脸。
-再撒一批人像图收效有限；要补的是**那类室内环境本身 + 无文字的屏状表面**。
+The negative correlation on face count directly falsifies the intuitive "more people means
+more false triggers" assumption. Several of the highest-scoring false positives contain zero
+detected frontal faces. Scattering another batch of people photographs at the problem will not
+help much; what needs covering is that class of indoor environment itself, plus screen-like
+surfaces with no text on them.
 
-**(d) 表征极限（这是最终的落点）：**
-守门员在 **96×96 灰度**下学到的触发信号是「亮室内 + 矩形屏状区域」。这个信号在
-**正类**（办公室里有文字的屏）和**负类**（同一间办公室里关掉的屏 / 窗 / 画框 / 白墙）之间**高度共享**。
-**在 96×96 灰度上，"空白屏"和"有文字的屏"几乎不可分**——文字笔画在这个分辨率下已经糊掉。
-于是：只加同类负例，要么不够（noscreen 没动），要么以牺牲召回为代价（FN↑）——**这正是实验 3 观察到的现象**。
+**Where this lands.** At 96x96 greyscale the trigger signal the gatekeeper has learned is
+"bright indoor scene with a rectangular screen-like region", and that signal is shared almost
+equally between the positive class (a screen with text in an office) and the negative class
+(the switched-off screen, window, picture frame or white wall in the same office). A blank
+screen and a text-bearing screen are close to inseparable at that resolution, because the
+letterforms have already been destroyed by the downscale. Adding more negatives of the same
+kind therefore either does nothing (noscreen did not move) or costs recall (FN rose) — which
+is exactly what experiment 3 produced.
 
----
+## 4. Conclusion
 
-## 4. 结论：为什么"提不上去"
+Two of the most intuitive hypotheses were eliminated by experiment, which located the
+bottleneck in a third place.
 
-**不是没努力，而是用实验系统性排除了两个最直觉的假设，把瓶颈定位到了第三个地方。**
-
-| 假设 | 怎么检验的 | 结论 | 花的代价 |
+| Hypothesis | How it was tested | Result | Cost |
 |---|---|---|---|
-| **H1 容量不够** | 6 架构 × 5 seed，参数 3.8× 扫描，固定数据 | ❌ **证伪** — F1 平台 0.736–0.769，最大三个模型 ≤ baseline | 30 次训练 |
-| **H2 数据量不够** | +249 针对性负例重训，5-seed，固定探针前后对比 | ❌ **证伪（且负收益）** — 主目标 −0.017 在噪声内，FN +0.074 | 1 轮数据采集 + 5 次训练 |
-| **H3 分布 + 表征** | 59 张 FP 逐张诊断（场景 / 亮度 / 类屏几何 / 人脸数） | ✅ **当前最佳解释** — 误触发由室内建成环境驱动；96×96 灰度分不清空白屏 vs 文字屏 | — |
+| H1: not enough capacity | 6 architectures x 5 seeds, 3.8x parameter sweep, data held fixed | Falsified. F1 plateau 0.736–0.769, the three largest models at or below baseline | 30 training runs |
+| H2: not enough data | 249 targeted negatives, retrained, 5 seeds, before/after on fixed probes | Falsified, and net negative. Primary metric −0.017 inside noise, FN +0.074 | One data collection round plus 5 training runs |
+| H3: distribution and representation | All 59 false positives examined by scene, brightness, screen-like geometry and face count | Best current explanation. False triggers driven by built indoor environments; 96x96 greyscale cannot separate a blank screen from a text-bearing one | — |
 
-**这个排除过程本身就是结果。** 没有它，我们只会在"再调调参数""再多下点图"上无限循环。
-现在能明确说出："**下一笔投入不该花在参数量和图片数量上**"——这是一条可执行的负结论。
+The elimination is itself the result. Without it the default behaviour would have been to tune
+parameters and download more images indefinitely. What can now be stated is a negative
+conclusion that is actionable: the next unit of effort should not go into parameter count or
+image count.
 
-**另一个诚实的数字**：把 H1/H2 都排除后，当前守门员在固定探针上的真实工作点是
-`noscreen FP ≈ 0.33 / person+screen recall ≈ 0.58`（@0.40，int8，5-seed）。
-这不是好看的数字，但它是**可复现、零泄漏、未挑 seed** 的数字。
+One more number worth stating plainly. With H1 and H2 both eliminated, the gatekeeper's actual
+working point on the fixed probes is noscreen FP around 0.33 and person-plus-screen recall
+around 0.58, at threshold 0.40, int8, across 5 seeds. That is not a good pair of numbers, but
+it is reproducible, leakage-free, and not seed-picked.
 
----
+## 5. What has not been ruled out
 
-## 5. 诚实边界（还没排除的东西）
+The scope of the elimination should not be overstated. None of the following has been
+falsified, and each remains open.
 
-不夸大排除范围，以下**尚未**被实验否定，仍是开放可能：
+1. Higher input resolution (128 or 160) has not been tried. It is the most direct test of the
+   H3 representation hypothesis, but it breaks the ESP32 budget because concurrent activations
+   would exceed 256 KB. It was skipped for budget reasons, not because it looks unpromising.
+   If H3 is to be tested, this is the first experiment to run.
+2. Distribution-matched negatives have not been tried — people, plus office/meeting/living
+   room, plus a screen with no text. task2b added empty rooms, which is not this. The risk is
+   known: such images very easily contain a readable screen, which would make them positives,
+   so QC cost is high. And once they enter training, the `noscreen` probe is demoted from a
+   held-out generalisation test to an in-distribution one, meaning part of any FP reduction
+   would be "trained on this kind of image" rather than real generalisation. That is a
+   methodological trade-off, not a free win.
+3. A two-stage cascade has not been tried — a coarse "is there a screen-like region" filter
+   followed by a very cheap "is there text present" discriminator.
+4. No architecture-family exploration. Only width, depth and stage count within one CNN family
+   were swept; depthwise-separable convolutions, attention and similar were not tried.
+5. The dataset is still small (2440–2689 images in the deduplicated training pool). The
+   accurate statement of what H2 falsified is "adding 249 more images in that direction did
+   not help", not "the dataset is large enough".
+6. The probes are posed Pexels photographs, not real frames grabbed from a head-mounted
+   camera. Numbers on real frames need to be re-measured with a Pi and a camera, which is on
+   the hardware to-do list.
 
-1. **没试过提高输入分辨率**（128/160）。这是 H3 表征假设最直接的检验，但**会破 ESP32 预算**（并发激活会超 256KB），
-   所以没做——不是因为无效，是因为超预算。**若要检验 H3，这是第一顺位实验。**
-2. **没试过"对准分布"的负例**（**有人** + 办公/会议/客厅 + 无文字屏）。task2b 补的是空房间，不是这一类。
-   风险已知：这类图极易混入可读屏（=正类），QC 成本高；且一旦纳入训练，`noscreen` 探针就从
-   "held-out 泛化测试"降级为"同分布测试"，FP 下降里会有一部分是"训过同类"而非真泛化——**这是方法论取舍**。
-3. **没试过两段式级联**（先粗筛"有屏状区域"，再接一个极廉价"文字存在性"判别器）。
-4. **没做架构族的探索**（只扫了同一 CNN 族的宽度/深度/阶段数；没试 depthwise-separable、注意力等）。
-5. **数据规模仍然小**（去重训练池 2440–2689 张）。H2 被证伪的准确表述是
-   "**在这个方向上再加 249 张没用**"，**不是**"数据量已经足够"。
-6. **探针是 Pexels 摆拍照**，不是头戴摄像头的真实抓拍帧。真实帧上的数字需要 Pi + 相机重测（已列入待硬件清单）。
+## 6. Options for what to do next
 
----
+Not pre-selected; this is the decision to be made.
 
-## 6. 下一步的选项（供导师定方向，**未预先选定**）
-
-| 选项 | 直接检验什么 | 成本 | 风险 |
+| Option | What it directly tests | Cost | Risk |
 |---|---|---|---|
-| **(a) 提分辨率到 128/160** | H3 表征假设——能否区分空白屏 vs 文字屏 | 中（重训 + 重估预算） | **破 ESP32 预算**，需重新定硬件目标（Pi 则无压力） |
-| **(b) 对准分布补负例**（有人 + 室内 + 无文字屏） | H2 的"分布对不对"而非"量够不够" | 高（人眼 QC） | 探针降级为同分布测试；污染负类风险 |
-| **(c) 两段式级联**（屏状区域 → 文字存在性） | 把一个难二分类拆成两个易判别 | 中高（新模型 + 新标注） | 增加端侧算力/复杂度 |
-| **(d) 接受当前 FP 地板，转攻权衡曲线** | 不追求提 F1，改为在"功耗 vs 漏报"上给最优工作点 | 低（已有阈值扫描数据） | 不解决准确率，但**这正是导师第 3 条要的 Pareto 曲线** |
+| (a) Raise resolution to 128/160 | H3, the representation hypothesis: can a blank screen be told from a text-bearing one | Medium (retrain plus re-estimate budget) | Breaks the ESP32 budget, so the hardware target would need redefining. No pressure on a Pi |
+| (b) Distribution-matched negatives (people, indoor, no text screen) | Whether H2's problem was the distribution rather than the amount | High (manual QC) | Demotes the probe to an in-distribution test; risk of contaminating the negative class |
+| (c) Two-stage cascade (screen-like region, then text presence) | Splitting one hard binary decision into two easy ones | Medium-high (new model plus new labelling) | More on-device compute and complexity |
+| (d) Accept the current FP floor and work the trade-off curve instead | Not chasing F1; deliver the best operating point on power versus missed captures | Low (threshold sweep data already exists) | Does not fix accuracy, but it is exactly the Pareto curve advisor question 3 asks for |
 
-> **推荐**：**(a) + (d) 并行**。(a) 因为它是对 H3 唯一的直接检验，且既然部署平台已经从 ESP32
-> 放宽到 Raspberry Pi 5（`hardware/edge` 分支），分辨率预算的约束已经没那么硬；
-> (d) 因为它**不依赖准确率提升就能交付价值**，且正是导师第 3 条问题的答案（见
-> `docs/pareto-method.md`）。**(b) 的性价比最低**——实验 3 已经付过一次学费。
+Recommendation: run (a) and (d) in parallel. (a) because it is the only direct test of H3, and
+because the deployment target has already relaxed from ESP32 to Raspberry Pi 5 in the
+`hardware/` line, which makes the resolution budget much less binding. (d) because it delivers
+value without depending on an accuracy improvement, and it is the answer to advisor question 3
+(see `docs/pareto-method.md`). (b) has the worst cost-to-benefit ratio — experiment 3 already
+paid that tuition once.
 
----
-
-## 附：可复现命令
+## Appendix: commands to reproduce
 
 ```bash
-# 容量扫描：单候选 5-seed 全流水线（训练→test@0.40→int8 导出+白名单+ΔF1→双探针）
+# Capacity sweep: full 5-seed pipeline for one candidate
+# (train, test at 0.40, int8 export with whitelist and ΔF1 checks, both probes)
 PYTHONPATH=scripts .venv/bin/python scripts/run_candidate.py \
     --tag C_wide_uniform --channels 16,32,64,64 --convs 1
 
-# 误触发逐张诊断（只读，不重训）
+# Per-image false-trigger diagnosis (read-only, no retraining)
 PYTHONPATH=scripts .venv/bin/python scripts/task2b_fp_diagnosis.py
 
-# 泄漏核验
+# Leakage verification
 .venv/bin/python scripts/check_leakage.py --manifest data/processed/manifest_dedup.csv
 .venv/bin/python scripts/guard_probe_overlap.py
 ```
 
-**数字来源声明**：本报告所有指标均为本机实测（`docs/results/task1_results/*.json`、
-`docs/results/task2b_results/*`、各探针 `probe_fp_summary.json`），非设计期估计、非文献引用。
-所有 5-seed 数字未挑 seed；所有"不严格可比"的对比已在表内标注。
+Provenance: every metric in this report was measured on this machine, from
+`docs/results/task1_results/*.json`, `docs/results/task2b_results/*` and the per-probe
+`probe_fp_summary.json`. None of it is a design-time estimate or a figure quoted from
+literature. No 5-seed number was seed-picked, and every comparison that is not strictly
+like-for-like is marked as such in its table.
