@@ -1,0 +1,7 @@
+# 运行时产物（在 Pi/笔记本上生成），不入库。
+captures/
+outbox/
+received/
+*.jpg
+*.png
+hits.log
