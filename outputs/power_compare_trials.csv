@@ -1,0 +1,61 @@
+trial,path,meter,is_real,p_idle_mw,capture_ms,compute_ms,tx_bytes,tx_ms,e_capture_mj,e_compute_mj,e_tx_mj,e_total_mj,latency_ms,notes
+0,X_local_ocr,mock,False,2800.1,118.2,831.0,1361,181.6,94.53,1168.89,199.25,1462.67,1130.8,compute=Tesseract OCR; tx=text only
+0,Y_send_image,mock,False,2800.1,118.4,37.5,941539,1487.8,95.28,18.71,1635.01,1748.99,1643.7,compute=JPEG encode only; tx=full image
+1,X_local_ocr,mock,False,2800.1,117.3,862.7,1481,181.7,93.53,1203.17,197.35,1494.04,1161.7,compute=Tesseract OCR; tx=text only
+1,Y_send_image,mock,False,2800.1,128.2,45.6,807709,1450.3,102.97,23.5,1590.49,1716.96,1624.0,compute=JPEG encode only; tx=full image
+2,X_local_ocr,mock,False,2800.1,123.1,994.2,1414,181.9,98.91,1393.47,199.49,1691.87,1299.2,compute=Tesseract OCR; tx=text only
+2,Y_send_image,mock,False,2800.1,126.6,37.7,860965,1249.3,101.0,17.8,1372.18,1490.99,1413.7,compute=JPEG encode only; tx=full image
+3,X_local_ocr,mock,False,2800.1,130.9,823.5,1531,182.0,102.95,1155.9,201.94,1460.79,1136.4,compute=Tesseract OCR; tx=text only
+3,Y_send_image,mock,False,2800.1,129.8,39.4,971031,1855.3,102.59,19.18,2043.45,2165.23,2024.5,compute=JPEG encode only; tx=full image
+4,X_local_ocr,mock,False,2800.1,87.3,783.2,1079,181.3,69.72,1096.16,199.8,1365.69,1051.8,compute=Tesseract OCR; tx=text only
+4,Y_send_image,mock,False,2800.1,128.3,38.9,1005920,1758.5,103.25,19.84,1936.16,2059.26,1925.7,compute=JPEG encode only; tx=full image
+5,X_local_ocr,mock,False,2800.1,118.9,817.7,1440,181.7,96.42,1144.49,199.97,1440.87,1118.3,compute=Tesseract OCR; tx=text only
+5,Y_send_image,mock,False,2800.1,128.0,46.7,981243,1400.7,102.08,23.6,1544.4,1670.09,1575.4,compute=JPEG encode only; tx=full image
+6,X_local_ocr,mock,False,2800.1,112.2,771.1,1235,181.5,88.46,1074.56,198.37,1361.39,1064.8,compute=Tesseract OCR; tx=text only
+6,Y_send_image,mock,False,2800.1,116.9,56.7,797588,1453.3,93.76,28.23,1598.04,1720.03,1626.9,compute=JPEG encode only; tx=full image
+7,X_local_ocr,mock,False,2800.1,129.6,1006.4,1576,181.9,103.11,1410.38,201.56,1715.04,1317.9,compute=Tesseract OCR; tx=text only
+7,Y_send_image,mock,False,2800.1,137.8,44.5,722130,1226.4,109.61,22.26,1347.24,1479.12,1408.7,compute=JPEG encode only; tx=full image
+8,X_local_ocr,mock,False,2800.1,131.9,691.2,1411,181.8,105.38,967.73,201.28,1274.39,1004.9,compute=Tesseract OCR; tx=text only
+8,Y_send_image,mock,False,2800.1,116.1,48.6,972597,1141.9,92.49,24.32,1254.69,1371.5,1306.5,compute=JPEG encode only; tx=full image
+9,X_local_ocr,mock,False,2800.1,127.7,783.0,1203,181.8,102.06,1091.27,198.35,1391.69,1092.5,compute=Tesseract OCR; tx=text only
+9,Y_send_image,mock,False,2800.1,131.9,42.2,891217,1248.2,106.65,21.56,1373.23,1501.45,1422.3,compute=JPEG encode only; tx=full image
+10,X_local_ocr,mock,False,2800.1,111.0,817.7,755,181.2,87.65,1145.2,198.15,1431.0,1109.9,compute=Tesseract OCR; tx=text only
+10,Y_send_image,mock,False,2800.1,112.9,47.1,1049186,1582.8,91.38,23.7,1742.09,1857.16,1742.8,compute=JPEG encode only; tx=full image
+11,X_local_ocr,mock,False,2800.1,123.3,868.5,1779,182.1,99.91,1214.48,201.56,1515.95,1173.8,compute=Tesseract OCR; tx=text only
+11,Y_send_image,mock,False,2800.1,123.4,39.9,1012923,1457.5,99.15,19.47,1602.53,1721.16,1620.9,compute=JPEG encode only; tx=full image
+12,X_local_ocr,mock,False,2800.1,135.3,846.7,2083,182.9,109.57,1180.25,201.52,1491.35,1165.0,compute=Tesseract OCR; tx=text only
+12,Y_send_image,mock,False,2800.1,139.9,45.6,835466,1520.9,110.71,23.09,1668.57,1802.38,1706.4,compute=JPEG encode only; tx=full image
+13,X_local_ocr,mock,False,2800.1,118.1,1006.6,1685,182.0,94.3,1410.11,201.89,1706.3,1306.7,compute=Tesseract OCR; tx=text only
+13,Y_send_image,mock,False,2800.1,90.3,48.6,969481,1588.9,72.58,23.67,1748.23,1844.48,1727.7,compute=JPEG encode only; tx=full image
+14,X_local_ocr,mock,False,2800.1,112.2,849.7,2003,183.2,88.57,1183.89,202.01,1474.47,1145.1,compute=Tesseract OCR; tx=text only
+14,Y_send_image,mock,False,2800.1,114.7,51.8,844231,1370.7,91.85,26.93,1505.49,1624.27,1537.2,compute=JPEG encode only; tx=full image
+15,X_local_ocr,mock,False,2800.1,121.2,713.5,1476,182.4,98.0,996.02,202.0,1296.02,1017.1,compute=Tesseract OCR; tx=text only
+15,Y_send_image,mock,False,2800.1,131.1,45.0,1185428,1696.7,105.18,22.49,1866.61,1994.28,1872.8,compute=JPEG encode only; tx=full image
+16,X_local_ocr,mock,False,2800.1,137.1,706.6,1357,181.7,108.03,988.22,201.28,1297.53,1025.4,compute=Tesseract OCR; tx=text only
+16,Y_send_image,mock,False,2800.1,141.8,36.6,1023827,1433.9,113.18,18.26,1577.29,1708.73,1612.3,compute=JPEG encode only; tx=full image
+17,X_local_ocr,mock,False,2800.1,139.2,928.4,1418,182.1,110.73,1300.09,200.22,1611.04,1249.6,compute=Tesseract OCR; tx=text only
+17,Y_send_image,mock,False,2800.1,104.4,46.0,876037,1076.4,83.23,23.09,1181.7,1288.03,1226.8,compute=JPEG encode only; tx=full image
+18,X_local_ocr,mock,False,2800.1,112.4,885.2,850,181.2,89.33,1242.7,198.44,1530.47,1178.8,compute=Tesseract OCR; tx=text only
+18,Y_send_image,mock,False,2800.1,123.3,49.1,1081012,1631.0,101.18,25.52,1790.44,1917.14,1803.3,compute=JPEG encode only; tx=full image
+19,X_local_ocr,mock,False,2800.1,106.0,900.4,1580,182.0,86.06,1259.83,197.34,1543.23,1188.4,compute=Tesseract OCR; tx=text only
+19,Y_send_image,mock,False,2800.1,111.2,50.7,910986,1279.3,90.73,26.02,1407.37,1524.13,1441.2,compute=JPEG encode only; tx=full image
+20,X_local_ocr,mock,False,2800.1,135.9,917.0,1500,181.5,107.79,1287.94,198.89,1594.62,1234.5,compute=Tesseract OCR; tx=text only
+20,Y_send_image,mock,False,2800.1,123.0,43.5,913995,1176.9,98.53,22.1,1296.07,1416.7,1343.5,compute=JPEG encode only; tx=full image
+21,X_local_ocr,mock,False,2800.1,121.5,907.1,1818,182.6,96.82,1271.87,199.53,1568.21,1211.2,compute=Tesseract OCR; tx=text only
+21,Y_send_image,mock,False,2800.1,98.4,46.5,928716,1542.6,78.36,23.18,1697.9,1799.44,1687.5,compute=JPEG encode only; tx=full image
+22,X_local_ocr,mock,False,2800.1,130.9,916.8,1051,181.3,103.06,1282.95,199.88,1585.89,1229.0,compute=Tesseract OCR; tx=text only
+22,Y_send_image,mock,False,2800.1,117.5,37.6,956618,1464.2,95.55,19.33,1613.56,1728.43,1619.3,compute=JPEG encode only; tx=full image
+23,X_local_ocr,mock,False,2800.1,110.7,907.5,1570,182.3,90.12,1273.41,201.58,1565.1,1200.5,compute=Tesseract OCR; tx=text only
+23,Y_send_image,mock,False,2800.1,125.0,50.1,810916,1202.8,99.38,24.96,1317.21,1441.56,1377.9,compute=JPEG encode only; tx=full image
+24,X_local_ocr,mock,False,2800.1,120.0,1099.3,748,180.9,96.37,1535.98,198.59,1830.95,1400.2,compute=Tesseract OCR; tx=text only
+24,Y_send_image,mock,False,2800.1,116.2,44.5,1137698,1698.9,93.82,21.64,1871.48,1986.94,1859.6,compute=JPEG encode only; tx=full image
+25,X_local_ocr,mock,False,2800.1,148.0,801.4,1522,182.2,119.82,1119.47,201.59,1440.88,1131.6,compute=Tesseract OCR; tx=text only
+25,Y_send_image,mock,False,2800.1,111.4,45.3,864678,1298.9,90.32,23.13,1433.72,1547.17,1455.6,compute=JPEG encode only; tx=full image
+26,X_local_ocr,mock,False,2800.1,93.7,1070.3,1341,181.4,75.32,1494.8,201.62,1771.74,1345.4,compute=Tesseract OCR; tx=text only
+26,Y_send_image,mock,False,2800.1,107.4,46.5,1295617,2166.7,85.74,23.67,2377.72,2487.13,2320.5,compute=JPEG encode only; tx=full image
+27,X_local_ocr,mock,False,2800.1,101.3,789.9,1565,181.9,81.87,1106.93,200.16,1388.95,1073.1,compute=Tesseract OCR; tx=text only
+27,Y_send_image,mock,False,2800.1,136.1,43.7,699718,1178.1,109.27,22.33,1297.53,1429.13,1357.9,compute=JPEG encode only; tx=full image
+28,X_local_ocr,mock,False,2800.1,135.5,901.2,715,181.0,107.33,1257.97,198.3,1563.6,1217.7,compute=Tesseract OCR; tx=text only
+28,Y_send_image,mock,False,2800.1,137.5,55.6,970210,1416.3,112.84,27.68,1558.76,1699.29,1609.4,compute=JPEG encode only; tx=full image
+29,X_local_ocr,mock,False,2800.1,104.5,757.2,1416,181.8,84.7,1056.88,200.57,1342.14,1043.5,compute=Tesseract OCR; tx=text only
+29,Y_send_image,mock,False,2800.1,127.3,42.6,756007,1321.1,101.15,20.96,1457.04,1579.16,1491.0,compute=JPEG encode only; tx=full image
