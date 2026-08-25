@@ -1,0 +1,56 @@
+{
+  "_说明": "守门员训练数据采集的关键词配置。增删关键词直接改这里即可。",
+  "_字段": "category=类别文件夹名；query=Pexels 搜索词；count=想下载多少张。",
+  "_类别约定": {
+    "positive": "正例：屏幕有用文字（PPT、投影、代码屏、文档）",
+    "negative_noise": "反例-噪声文字：招牌、书脊、包装文字、锁屏等",
+    "negative_clean": "反例-无文字：风景、人像、物体等"
+  },
+
+  "positive": [
+    {"query": "projector screen presentation", "count": 100},
+    {"query": "classroom projector slides",     "count": 150},
+    {"query": "computer screen text",           "count": 150},
+    {"query": "laptop screen code",             "count": 100},
+    {"query": "powerpoint slide",               "count": 150},
+    {"query": "document page text",             "count": 150},
+    {"query": "whiteboard writing",             "count": 100},
+
+    {"query": "software terminal screen",       "count": 30},
+    {"query": "conference keynote presentation","count": 30},
+    {"query": "lecture hall screen",            "count": 30},
+    {"query": "webinar presentation screen",    "count": 35},
+    {"query": "online course lecture video",    "count": 35},
+    {"query": "data dashboard monitor",         "count": 35},
+    {"query": "spreadsheet on computer screen", "count": 35},
+    {"query": "ebook reader tablet text",       "count": 35},
+    {"query": "scientific poster session",      "count": 30},
+    {"query": "coding tutorial laptop",         "count": 35},
+    {"query": "video conference meeting screen","count": 35}
+  ],
+
+  "negative_noise": [
+    {"query": "street signs",          "count": 80},
+    {"query": "store signage",         "count": 80},
+    {"query": "bookshelf spines",      "count": 80},
+    {"query": "product packaging text","count": 80},
+    {"query": "phone lock screen",     "count": 80},
+    {"query": "video playback screen", "count": 80},
+
+    {"query": "grocery product label",        "count": 30},
+    {"query": "cosmetic packaging closeup",   "count": 30},
+    {"query": "smartphone apps home screen",  "count": 30},
+    {"query": "tv streaming menu screen",     "count": 30}
+  ],
+
+  "negative_clean": [
+    {"query": "nature landscape",  "count": 80},
+    {"query": "people portrait",   "count": 80},
+    {"query": "office interior",   "count": 80},
+    {"query": "city street view",  "count": 80},
+    {"query": "food photography",  "count": 80},
+
+    {"query": "modern office workspace",  "count": 30},
+    {"query": "coworking space interior", "count": 30}
+  ]
+}

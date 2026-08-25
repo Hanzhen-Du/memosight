@@ -1,0 +1,23 @@
+{
+  "_说明": "阶段3.4 定向扩充关键词（概念彼此不同，避免与既有关键词命中同一批 Pexels 图）。偏重 FN 高发正例 + FP 高发硬负例。",
+  "positive": [
+    {"query": "webinar presentation screen", "count": 35},
+    {"query": "online course lecture video", "count": 35},
+    {"query": "data dashboard monitor", "count": 35},
+    {"query": "spreadsheet on computer screen", "count": 35},
+    {"query": "ebook reader tablet text", "count": 35},
+    {"query": "scientific poster session", "count": 30},
+    {"query": "coding tutorial laptop", "count": 35},
+    {"query": "video conference meeting screen", "count": 35}
+  ],
+  "negative_noise": [
+    {"query": "grocery product label", "count": 30},
+    {"query": "cosmetic packaging closeup", "count": 30},
+    {"query": "smartphone apps home screen", "count": 30},
+    {"query": "tv streaming menu screen", "count": 30}
+  ],
+  "negative_clean": [
+    {"query": "modern office workspace", "count": 30},
+    {"query": "coworking space interior", "count": 30}
+  ]
+}
