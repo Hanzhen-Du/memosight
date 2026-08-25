@@ -1,0 +1,183 @@
+{
+  "tag": "B_deep_stack",
+  "channels": [
+    8,
+    16,
+    32,
+    64
+  ],
+  "convs_per_stage": 2,
+  "params": 74314,
+  "int8_weight_kb": 72.6,
+  "threshold": 0.4,
+  "seeds": [
+    42,
+    1,
+    7,
+    123,
+    2024
+  ],
+  "all_whitelisted": true,
+  "max_float32_tensors": 0,
+  "ops_union": [
+    "AVERAGE_POOL_2D",
+    "CONV_2D",
+    "FULLY_CONNECTED",
+    "MAX_POOL_2D",
+    "SOFTMAX"
+  ],
+  "probe_n": {
+    "noscreen": 235,
+    "screen": 181
+  },
+  "per_seed": [
+    {
+      "seed": 42,
+      "stopped_epoch": 37,
+      "val_f1": 0.7551,
+      "test_f1": 0.6714,
+      "test_fn": 0.4025,
+      "test_fp": 0.1381,
+      "test_recall": 0.5975,
+      "test_acc": 0.748,
+      "quant_df1": 0.0095,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.1915,
+      "screen_recall": 0.442,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    },
+    {
+      "seed": 1,
+      "stopped_epoch": 42,
+      "val_f1": 0.7571,
+      "test_f1": 0.7613,
+      "test_fn": 0.2075,
+      "test_fp": 0.219,
+      "test_recall": 0.7925,
+      "test_acc": 0.7859,
+      "quant_df1": 0.0009,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.4128,
+      "screen_recall": 0.6409,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    },
+    {
+      "seed": 7,
+      "stopped_epoch": 41,
+      "val_f1": 0.7645,
+      "test_f1": 0.7688,
+      "test_fn": 0.1635,
+      "test_fp": 0.2571,
+      "test_recall": 0.8365,
+      "test_acc": 0.7832,
+      "quant_df1": -0.0092,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.3702,
+      "screen_recall": 0.6298,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    },
+    {
+      "seed": 123,
+      "stopped_epoch": 48,
+      "val_f1": 0.79,
+      "test_f1": 0.7601,
+      "test_fn": 0.2327,
+      "test_fp": 0.1905,
+      "test_recall": 0.7673,
+      "test_acc": 0.7913,
+      "quant_df1": -0.0045,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.3489,
+      "screen_recall": 0.6022,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    },
+    {
+      "seed": 2024,
+      "stopped_epoch": 42,
+      "val_f1": 0.7627,
+      "test_f1": 0.7345,
+      "test_fn": 0.1824,
+      "test_fp": 0.3095,
+      "test_recall": 0.8176,
+      "test_acc": 0.7453,
+      "quant_df1": 0.0,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.4085,
+      "screen_recall": 0.6851,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    }
+  ],
+  "summary": {
+    "val_f1": {
+      "mean": 0.7659,
+      "std": 0.0125
+    },
+    "test_f1": {
+      "mean": 0.7392,
+      "std": 0.0358
+    },
+    "test_fn": {
+      "mean": 0.2377,
+      "std": 0.0856
+    },
+    "test_fp": {
+      "mean": 0.2228,
+      "std": 0.0582
+    },
+    "test_recall": {
+      "mean": 0.7623,
+      "std": 0.0856
+    },
+    "test_acc": {
+      "mean": 0.7707,
+      "std": 0.0199
+    },
+    "quant_df1": {
+      "mean": -0.0007,
+      "std": 0.0062
+    },
+    "noscreen_fp": {
+      "mean": 0.3464,
+      "std": 0.081
+    },
+    "screen_recall": {
+      "mean": 0.6,
+      "std": 0.0834
+    }
+  }
+}

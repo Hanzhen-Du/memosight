@@ -1,0 +1,40 @@
+{
+  "model": "models/gatekeeper_v4_mvp.keras",
+  "threshold": 0.55,
+  "val": {
+    "threshold": 0.55,
+    "n": 261,
+    "n_pos": 138,
+    "n_neg": 123,
+    "accuracy": 0.7893,
+    "precision": 0.7943,
+    "recall": 0.8116,
+    "f1": 0.8029,
+    "fn_rate": 0.1884,
+    "fp_rate": 0.2358,
+    "confusion": {
+      "tn": 94,
+      "fp": 29,
+      "fn": 26,
+      "tp": 112
+    }
+  },
+  "test": {
+    "threshold": 0.55,
+    "n": 265,
+    "n_pos": 139,
+    "n_neg": 126,
+    "accuracy": 0.7736,
+    "precision": 0.7883,
+    "recall": 0.777,
+    "f1": 0.7826,
+    "fn_rate": 0.223,
+    "fp_rate": 0.2302,
+    "confusion": {
+      "tn": 97,
+      "fp": 29,
+      "fn": 31,
+      "tp": 108
+    }
+  }
+}

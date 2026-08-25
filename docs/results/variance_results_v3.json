@@ -1,0 +1,146 @@
+{
+  "seeds": [
+    42,
+    1,
+    7,
+    123,
+    2024
+  ],
+  "config": {
+    "bn_momentum": 0.9,
+    "patience": 15,
+    "start_from_epoch": 20,
+    "epochs": 80,
+    "lr": 0.001,
+    "batch_size": 32,
+    "size": 96
+  },
+  "per_seed": [
+    {
+      "threshold": 0.5,
+      "n": 295,
+      "n_pos": 139,
+      "n_neg": 156,
+      "accuracy": 0.7119,
+      "precision": 0.6957,
+      "recall": 0.6906,
+      "f1": 0.6931,
+      "fn_rate": 0.3094,
+      "fp_rate": 0.2692,
+      "confusion": {
+        "tn": 114,
+        "fp": 42,
+        "fn": 43,
+        "tp": 96
+      },
+      "seed": 42,
+      "stopped_epoch": 53
+    },
+    {
+      "threshold": 0.5,
+      "n": 295,
+      "n_pos": 139,
+      "n_neg": 156,
+      "accuracy": 0.7153,
+      "precision": 0.6708,
+      "recall": 0.777,
+      "f1": 0.72,
+      "fn_rate": 0.223,
+      "fp_rate": 0.3397,
+      "confusion": {
+        "tn": 103,
+        "fp": 53,
+        "fn": 31,
+        "tp": 108
+      },
+      "seed": 1,
+      "stopped_epoch": 45
+    },
+    {
+      "threshold": 0.5,
+      "n": 295,
+      "n_pos": 139,
+      "n_neg": 156,
+      "accuracy": 0.7254,
+      "precision": 0.6883,
+      "recall": 0.7626,
+      "f1": 0.7235,
+      "fn_rate": 0.2374,
+      "fp_rate": 0.3077,
+      "confusion": {
+        "tn": 108,
+        "fp": 48,
+        "fn": 33,
+        "tp": 106
+      },
+      "seed": 7,
+      "stopped_epoch": 48
+    },
+    {
+      "threshold": 0.5,
+      "n": 295,
+      "n_pos": 139,
+      "n_neg": 156,
+      "accuracy": 0.7458,
+      "precision": 0.7807,
+      "recall": 0.6403,
+      "f1": 0.7036,
+      "fn_rate": 0.3597,
+      "fp_rate": 0.1603,
+      "confusion": {
+        "tn": 131,
+        "fp": 25,
+        "fn": 50,
+        "tp": 89
+      },
+      "seed": 123,
+      "stopped_epoch": 46
+    },
+    {
+      "threshold": 0.5,
+      "n": 295,
+      "n_pos": 139,
+      "n_neg": 156,
+      "accuracy": 0.7051,
+      "precision": 0.7281,
+      "recall": 0.5971,
+      "f1": 0.6561,
+      "fn_rate": 0.4029,
+      "fp_rate": 0.1987,
+      "confusion": {
+        "tn": 125,
+        "fp": 31,
+        "fn": 56,
+        "tp": 83
+      },
+      "seed": 2024,
+      "stopped_epoch": 51
+    }
+  ],
+  "summary": {
+    "accuracy": {
+      "mean": 0.7207,
+      "std": 0.0142
+    },
+    "f1": {
+      "mean": 0.6993,
+      "std": 0.0242
+    },
+    "recall": {
+      "mean": 0.6935,
+      "std": 0.0691
+    },
+    "precision": {
+      "mean": 0.7127,
+      "std": 0.0387
+    },
+    "fn_rate": {
+      "mean": 0.3065,
+      "std": 0.0691
+    },
+    "fp_rate": {
+      "mean": 0.2551,
+      "std": 0.0668
+    }
+  }
+}

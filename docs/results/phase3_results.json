@@ -1,0 +1,690 @@
+[
+  {
+    "name": "p32_posmult15",
+    "stopped_epoch": 49,
+    "selected_threshold": 0.4,
+    "ckpt": "models/gatekeeper_p32_posmult15.keras",
+    "config": {
+      "loss": "ce",
+      "focal_gamma": 2.0,
+      "focal_alpha": 0.75,
+      "pos_weight_mult": 1.5,
+      "class_weight": "balanced",
+      "aug_level": "base"
+    },
+    "val@0.5": {
+      "threshold": 0.5,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.823,
+      "precision": 0.8415,
+      "recall": 0.7188,
+      "f1": 0.7753,
+      "fn_rate": 0.2812,
+      "fp_rate": 0.1,
+      "confusion": {
+        "tn": 117,
+        "fp": 13,
+        "fn": 27,
+        "tp": 69
+      }
+    },
+    "val@thr": {
+      "threshold": 0.4,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.823,
+      "precision": 0.7917,
+      "recall": 0.7917,
+      "f1": 0.7917,
+      "fn_rate": 0.2083,
+      "fp_rate": 0.1538,
+      "confusion": {
+        "tn": 110,
+        "fp": 20,
+        "fn": 20,
+        "tp": 76
+      }
+    },
+    "test@0.5": {
+      "threshold": 0.5,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7619,
+      "precision": 0.7722,
+      "recall": 0.6224,
+      "f1": 0.6893,
+      "fn_rate": 0.3776,
+      "fp_rate": 0.1353,
+      "confusion": {
+        "tn": 115,
+        "fp": 18,
+        "fn": 37,
+        "tp": 61
+      }
+    },
+    "test@thr": {
+      "threshold": 0.4,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7619,
+      "precision": 0.7363,
+      "recall": 0.6837,
+      "f1": 0.709,
+      "fn_rate": 0.3163,
+      "fp_rate": 0.1805,
+      "confusion": {
+        "tn": 109,
+        "fp": 24,
+        "fn": 31,
+        "tp": 67
+      }
+    }
+  },
+  {
+    "name": "p32_posmult20",
+    "stopped_epoch": 48,
+    "selected_threshold": 0.45,
+    "ckpt": "models/gatekeeper_p32_posmult20.keras",
+    "config": {
+      "loss": "ce",
+      "focal_gamma": 2.0,
+      "focal_alpha": 0.75,
+      "pos_weight_mult": 2.0,
+      "class_weight": "balanced",
+      "aug_level": "base"
+    },
+    "val@0.5": {
+      "threshold": 0.5,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.8186,
+      "precision": 0.8161,
+      "recall": 0.7396,
+      "f1": 0.776,
+      "fn_rate": 0.2604,
+      "fp_rate": 0.1231,
+      "confusion": {
+        "tn": 114,
+        "fp": 16,
+        "fn": 25,
+        "tp": 71
+      }
+    },
+    "val@thr": {
+      "threshold": 0.45,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.823,
+      "precision": 0.7979,
+      "recall": 0.7812,
+      "f1": 0.7895,
+      "fn_rate": 0.2188,
+      "fp_rate": 0.1462,
+      "confusion": {
+        "tn": 111,
+        "fp": 19,
+        "fn": 21,
+        "tp": 75
+      }
+    },
+    "test@0.5": {
+      "threshold": 0.5,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7922,
+      "precision": 0.7778,
+      "recall": 0.7143,
+      "f1": 0.7447,
+      "fn_rate": 0.2857,
+      "fp_rate": 0.1504,
+      "confusion": {
+        "tn": 113,
+        "fp": 20,
+        "fn": 28,
+        "tp": 70
+      }
+    },
+    "test@thr": {
+      "threshold": 0.45,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7922,
+      "precision": 0.7604,
+      "recall": 0.7449,
+      "f1": 0.7526,
+      "fn_rate": 0.2551,
+      "fp_rate": 0.1729,
+      "confusion": {
+        "tn": 110,
+        "fp": 23,
+        "fn": 25,
+        "tp": 73
+      }
+    }
+  },
+  {
+    "name": "p32_focal",
+    "stopped_epoch": 62,
+    "selected_threshold": 0.55,
+    "ckpt": "models/gatekeeper_p32_focal.keras",
+    "config": {
+      "loss": "focal",
+      "focal_gamma": 2.0,
+      "focal_alpha": 0.75,
+      "pos_weight_mult": 1.0,
+      "class_weight": "none",
+      "aug_level": "base"
+    },
+    "val@0.5": {
+      "threshold": 0.5,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.8053,
+      "precision": 0.7364,
+      "recall": 0.8438,
+      "f1": 0.7864,
+      "fn_rate": 0.1562,
+      "fp_rate": 0.2231,
+      "confusion": {
+        "tn": 101,
+        "fp": 29,
+        "fn": 15,
+        "tp": 81
+      }
+    },
+    "val@thr": {
+      "threshold": 0.55,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.8319,
+      "precision": 0.7959,
+      "recall": 0.8125,
+      "f1": 0.8041,
+      "fn_rate": 0.1875,
+      "fp_rate": 0.1538,
+      "confusion": {
+        "tn": 110,
+        "fp": 20,
+        "fn": 18,
+        "tp": 78
+      }
+    },
+    "test@0.5": {
+      "threshold": 0.5,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7706,
+      "precision": 0.6957,
+      "recall": 0.8163,
+      "f1": 0.7512,
+      "fn_rate": 0.1837,
+      "fp_rate": 0.2632,
+      "confusion": {
+        "tn": 98,
+        "fp": 35,
+        "fn": 18,
+        "tp": 80
+      }
+    },
+    "test@thr": {
+      "threshold": 0.55,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7792,
+      "precision": 0.7423,
+      "recall": 0.7347,
+      "f1": 0.7385,
+      "fn_rate": 0.2653,
+      "fp_rate": 0.188,
+      "confusion": {
+        "tn": 108,
+        "fp": 25,
+        "fn": 26,
+        "tp": 72
+      }
+    }
+  },
+  {
+    "name": "p33_screen",
+    "stopped_epoch": 80,
+    "selected_threshold": 0.45,
+    "ckpt": "models/gatekeeper_p33_screen.keras",
+    "config": {
+      "loss": "ce",
+      "focal_gamma": 2.0,
+      "focal_alpha": 0.75,
+      "pos_weight_mult": 1.0,
+      "class_weight": "balanced",
+      "aug_level": "screen"
+    },
+    "val@0.5": {
+      "threshold": 0.5,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.8319,
+      "precision": 0.8295,
+      "recall": 0.7604,
+      "f1": 0.7935,
+      "fn_rate": 0.2396,
+      "fp_rate": 0.1154,
+      "confusion": {
+        "tn": 115,
+        "fp": 15,
+        "fn": 23,
+        "tp": 73
+      }
+    },
+    "val@thr": {
+      "threshold": 0.45,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.8407,
+      "precision": 0.8125,
+      "recall": 0.8125,
+      "f1": 0.8125,
+      "fn_rate": 0.1875,
+      "fp_rate": 0.1385,
+      "confusion": {
+        "tn": 112,
+        "fp": 18,
+        "fn": 18,
+        "tp": 78
+      }
+    },
+    "test@0.5": {
+      "threshold": 0.5,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7879,
+      "precision": 0.7634,
+      "recall": 0.7245,
+      "f1": 0.7435,
+      "fn_rate": 0.2755,
+      "fp_rate": 0.1654,
+      "confusion": {
+        "tn": 111,
+        "fp": 22,
+        "fn": 27,
+        "tp": 71
+      }
+    },
+    "test@thr": {
+      "threshold": 0.45,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7922,
+      "precision": 0.7451,
+      "recall": 0.7755,
+      "f1": 0.76,
+      "fn_rate": 0.2245,
+      "fp_rate": 0.1955,
+      "confusion": {
+        "tn": 107,
+        "fp": 26,
+        "fn": 22,
+        "tp": 76
+      }
+    }
+  },
+  {
+    "name": "p33_screen_pm15",
+    "stopped_epoch": 48,
+    "selected_threshold": 0.45,
+    "ckpt": "models/gatekeeper_p33_screen_pm15.keras",
+    "config": {
+      "loss": "ce",
+      "focal_gamma": 2.0,
+      "focal_alpha": 0.75,
+      "pos_weight_mult": 1.5,
+      "class_weight": "balanced",
+      "aug_level": "screen"
+    },
+    "val@0.5": {
+      "threshold": 0.5,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.792,
+      "precision": 0.7526,
+      "recall": 0.7604,
+      "f1": 0.7565,
+      "fn_rate": 0.2396,
+      "fp_rate": 0.1846,
+      "confusion": {
+        "tn": 106,
+        "fp": 24,
+        "fn": 23,
+        "tp": 73
+      }
+    },
+    "val@thr": {
+      "threshold": 0.45,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.792,
+      "precision": 0.7379,
+      "recall": 0.7917,
+      "f1": 0.7638,
+      "fn_rate": 0.2083,
+      "fp_rate": 0.2077,
+      "confusion": {
+        "tn": 103,
+        "fp": 27,
+        "fn": 20,
+        "tp": 76
+      }
+    },
+    "test@0.5": {
+      "threshold": 0.5,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7532,
+      "precision": 0.7253,
+      "recall": 0.6735,
+      "f1": 0.6984,
+      "fn_rate": 0.3265,
+      "fp_rate": 0.188,
+      "confusion": {
+        "tn": 108,
+        "fp": 25,
+        "fn": 32,
+        "tp": 66
+      }
+    },
+    "test@thr": {
+      "threshold": 0.45,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7403,
+      "precision": 0.6939,
+      "recall": 0.6939,
+      "f1": 0.6939,
+      "fn_rate": 0.3061,
+      "fp_rate": 0.2256,
+      "confusion": {
+        "tn": 103,
+        "fp": 30,
+        "fn": 30,
+        "tp": 68
+      }
+    }
+  },
+  {
+    "name": "p33_screen_focal",
+    "stopped_epoch": 65,
+    "selected_threshold": 0.65,
+    "ckpt": "models/gatekeeper_p33_screen_focal.keras",
+    "config": {
+      "loss": "focal",
+      "focal_gamma": 2.0,
+      "focal_alpha": 0.75,
+      "pos_weight_mult": 1.0,
+      "class_weight": "none",
+      "aug_level": "screen"
+    },
+    "val@0.5": {
+      "threshold": 0.5,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.7655,
+      "precision": 0.6569,
+      "recall": 0.9375,
+      "f1": 0.7725,
+      "fn_rate": 0.0625,
+      "fp_rate": 0.3615,
+      "confusion": {
+        "tn": 83,
+        "fp": 47,
+        "fn": 6,
+        "tp": 90
+      }
+    },
+    "val@thr": {
+      "threshold": 0.65,
+      "n": 226,
+      "n_pos": 96,
+      "n_neg": 130,
+      "accuracy": 0.8363,
+      "precision": 0.8315,
+      "recall": 0.7708,
+      "f1": 0.8,
+      "fn_rate": 0.2292,
+      "fp_rate": 0.1154,
+      "confusion": {
+        "tn": 115,
+        "fp": 15,
+        "fn": 22,
+        "tp": 74
+      }
+    },
+    "test@0.5": {
+      "threshold": 0.5,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.6883,
+      "precision": 0.5903,
+      "recall": 0.8673,
+      "f1": 0.7025,
+      "fn_rate": 0.1327,
+      "fp_rate": 0.4436,
+      "confusion": {
+        "tn": 74,
+        "fp": 59,
+        "fn": 13,
+        "tp": 85
+      }
+    },
+    "test@thr": {
+      "threshold": 0.65,
+      "n": 231,
+      "n_pos": 98,
+      "n_neg": 133,
+      "accuracy": 0.7706,
+      "precision": 0.732,
+      "recall": 0.7245,
+      "f1": 0.7282,
+      "fn_rate": 0.2755,
+      "fp_rate": 0.1955,
+      "confusion": {
+        "tn": 107,
+        "fp": 26,
+        "fn": 27,
+        "tp": 71
+      }
+    }
+  },
+  {
+    "name": "v3_screen",
+    "stopped_epoch": 75,
+    "selected_threshold": 0.4,
+    "ckpt": "models/gatekeeper_v3_screen.keras",
+    "config": {
+      "loss": "ce",
+      "focal_gamma": 2.0,
+      "focal_alpha": 0.75,
+      "pos_weight_mult": 1.0,
+      "class_weight": "balanced",
+      "aug_level": "screen"
+    },
+    "val@0.5": {
+      "threshold": 0.5,
+      "n": 291,
+      "n_pos": 138,
+      "n_neg": 153,
+      "accuracy": 0.7835,
+      "precision": 0.7483,
+      "recall": 0.8188,
+      "f1": 0.782,
+      "fn_rate": 0.1812,
+      "fp_rate": 0.2484,
+      "confusion": {
+        "tn": 115,
+        "fp": 38,
+        "fn": 25,
+        "tp": 113
+      }
+    },
+    "val@thr": {
+      "threshold": 0.4,
+      "n": 291,
+      "n_pos": 138,
+      "n_neg": 153,
+      "accuracy": 0.7766,
+      "precision": 0.711,
+      "recall": 0.8913,
+      "f1": 0.791,
+      "fn_rate": 0.1087,
+      "fp_rate": 0.3268,
+      "confusion": {
+        "tn": 103,
+        "fp": 50,
+        "fn": 15,
+        "tp": 123
+      }
+    },
+    "test@0.5": {
+      "threshold": 0.5,
+      "n": 295,
+      "n_pos": 139,
+      "n_neg": 156,
+      "accuracy": 0.7153,
+      "precision": 0.6978,
+      "recall": 0.6978,
+      "f1": 0.6978,
+      "fn_rate": 0.3022,
+      "fp_rate": 0.2692,
+      "confusion": {
+        "tn": 114,
+        "fp": 42,
+        "fn": 42,
+        "tp": 97
+      }
+    },
+    "test@thr": {
+      "threshold": 0.4,
+      "n": 295,
+      "n_pos": 139,
+      "n_neg": 156,
+      "accuracy": 0.7322,
+      "precision": 0.6875,
+      "recall": 0.7914,
+      "f1": 0.7358,
+      "fn_rate": 0.2086,
+      "fp_rate": 0.3205,
+      "confusion": {
+        "tn": 106,
+        "fp": 50,
+        "fn": 29,
+        "tp": 110
+      }
+    }
+  },
+  {
+    "name": "v4_narrow",
+    "stopped_epoch": 80,
+    "selected_threshold": 0.55,
+    "ckpt": "models/gatekeeper_v4_narrow.keras",
+    "config": {
+      "loss": "ce",
+      "focal_gamma": 2.0,
+      "focal_alpha": 0.75,
+      "pos_weight_mult": 1.0,
+      "class_weight": "balanced",
+      "aug_level": "screen"
+    },
+    "val@0.5": {
+      "threshold": 0.5,
+      "n": 261,
+      "n_pos": 138,
+      "n_neg": 123,
+      "accuracy": 0.7739,
+      "precision": 0.7616,
+      "recall": 0.8333,
+      "f1": 0.7958,
+      "fn_rate": 0.1667,
+      "fp_rate": 0.2927,
+      "confusion": {
+        "tn": 87,
+        "fp": 36,
+        "fn": 23,
+        "tp": 115
+      }
+    },
+    "val@thr": {
+      "threshold": 0.55,
+      "n": 261,
+      "n_pos": 138,
+      "n_neg": 123,
+      "accuracy": 0.7893,
+      "precision": 0.7943,
+      "recall": 0.8116,
+      "f1": 0.8029,
+      "fn_rate": 0.1884,
+      "fp_rate": 0.2358,
+      "confusion": {
+        "tn": 94,
+        "fp": 29,
+        "fn": 26,
+        "tp": 112
+      }
+    },
+    "test@0.5": {
+      "threshold": 0.5,
+      "n": 265,
+      "n_pos": 139,
+      "n_neg": 126,
+      "accuracy": 0.7811,
+      "precision": 0.7755,
+      "recall": 0.8201,
+      "f1": 0.7972,
+      "fn_rate": 0.1799,
+      "fp_rate": 0.2619,
+      "confusion": {
+        "tn": 93,
+        "fp": 33,
+        "fn": 25,
+        "tp": 114
+      }
+    },
+    "test@thr": {
+      "threshold": 0.55,
+      "n": 265,
+      "n_pos": 139,
+      "n_neg": 126,
+      "accuracy": 0.7736,
+      "precision": 0.7883,
+      "recall": 0.777,
+      "f1": 0.7826,
+      "fn_rate": 0.223,
+      "fp_rate": 0.2302,
+      "confusion": {
+        "tn": 97,
+        "fp": 29,
+        "fn": 31,
+        "tp": 108
+      }
+    }
+  }
+]

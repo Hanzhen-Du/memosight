@@ -1,0 +1,184 @@
+{
+  "tag": "D_five_stage",
+  "channels": [
+    8,
+    16,
+    32,
+    64,
+    96
+  ],
+  "convs_per_stage": 1,
+  "params": 80618,
+  "int8_weight_kb": 78.7,
+  "threshold": 0.4,
+  "seeds": [
+    42,
+    1,
+    7,
+    123,
+    2024
+  ],
+  "all_whitelisted": true,
+  "max_float32_tensors": 0,
+  "ops_union": [
+    "AVERAGE_POOL_2D",
+    "CONV_2D",
+    "FULLY_CONNECTED",
+    "MAX_POOL_2D",
+    "SOFTMAX"
+  ],
+  "probe_n": {
+    "noscreen": 235,
+    "screen": 181
+  },
+  "per_seed": [
+    {
+      "seed": 42,
+      "stopped_epoch": 37,
+      "val_f1": 0.7582,
+      "test_f1": 0.7456,
+      "test_fn": 0.2075,
+      "test_fp": 0.2524,
+      "test_recall": 0.7925,
+      "test_acc": 0.7669,
+      "quant_df1": 0.0051,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.3787,
+      "screen_recall": 0.6464,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    },
+    {
+      "seed": 1,
+      "stopped_epoch": 38,
+      "val_f1": 0.7829,
+      "test_f1": 0.7513,
+      "test_fn": 0.1069,
+      "test_fp": 0.3667,
+      "test_recall": 0.8931,
+      "test_acc": 0.7453,
+      "quant_df1": 0.0,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.5532,
+      "screen_recall": 0.7845,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    },
+    {
+      "seed": 7,
+      "stopped_epoch": 38,
+      "val_f1": 0.7461,
+      "test_f1": 0.7421,
+      "test_fn": 0.2579,
+      "test_fp": 0.1952,
+      "test_recall": 0.7421,
+      "test_acc": 0.7778,
+      "quant_df1": 0.0079,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.2894,
+      "screen_recall": 0.5635,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    },
+    {
+      "seed": 123,
+      "stopped_epoch": 36,
+      "val_f1": 0.7933,
+      "test_f1": 0.744,
+      "test_fn": 0.3145,
+      "test_fp": 0.119,
+      "test_recall": 0.6855,
+      "test_acc": 0.7967,
+      "quant_df1": -0.0053,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.2085,
+      "screen_recall": 0.4033,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    },
+    {
+      "seed": 2024,
+      "stopped_epoch": 36,
+      "val_f1": 0.708,
+      "test_f1": 0.6966,
+      "test_fn": 0.2201,
+      "test_fp": 0.3476,
+      "test_recall": 0.7799,
+      "test_acc": 0.7073,
+      "quant_df1": -0.0054,
+      "all_whitelisted": true,
+      "n_float32": 0,
+      "noscreen_fp": 0.4426,
+      "screen_recall": 0.6022,
+      "ops": [
+        "AVERAGE_POOL_2D",
+        "CONV_2D",
+        "FULLY_CONNECTED",
+        "MAX_POOL_2D",
+        "SOFTMAX"
+      ]
+    }
+  ],
+  "summary": {
+    "val_f1": {
+      "mean": 0.7577,
+      "std": 0.03
+    },
+    "test_f1": {
+      "mean": 0.7359,
+      "std": 0.0199
+    },
+    "test_fn": {
+      "mean": 0.2214,
+      "std": 0.0683
+    },
+    "test_fp": {
+      "mean": 0.2562,
+      "std": 0.0929
+    },
+    "test_recall": {
+      "mean": 0.7786,
+      "std": 0.0683
+    },
+    "test_acc": {
+      "mean": 0.7588,
+      "std": 0.0307
+    },
+    "quant_df1": {
+      "mean": 0.0005,
+      "std": 0.0054
+    },
+    "noscreen_fp": {
+      "mean": 0.3745,
+      "std": 0.1195
+    },
+    "screen_recall": {
+      "mean": 0.6,
+      "std": 0.1235
+    }
+  }
+}

@@ -57,7 +57,7 @@ except ImportError:
 PEXELS_SEARCH_URL = "https://api.pexels.com/v1/search"
 PEXELS_MAX_PER_PAGE = 80
 
-# 默认输出根目录（data/ 不进 git，见 CLAUDE.md）。
+# 默认输出根目录（data/ 不进 git）。
 DEFAULT_OUTPUT_ROOT = "data/raw"
 # 默认关键词配置文件（与本脚本同目录）。
 DEFAULT_CONFIG = Path(__file__).resolve().parent / "keywords.json"
